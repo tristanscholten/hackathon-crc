@@ -26,25 +26,35 @@
         fail_msg: "Set CRC_PULL_SECRET_PATH or place the pull secret at {{ crc_pull_secret_src }}"
       no_log: true
 
-    - name: Check KVM device
-      ansible.builtin.stat:
-        path: /dev/kvm
-      register: crc_kvm_device
-
-    - name: Assert nested virtualization / KVM is available
-      ansible.builtin.assert:
-        that:
-          - crc_kvm_device.stat.exists
-        fail_msg: >-
-          CRC requires hardware virtualization. Enable nested virtualization / host CPU passthrough
-          for this VM so /dev/kvm exists.
-
   tasks:
     - name: Install Ubuntu packages
       ansible.builtin.apt:
         name: "{{ crc_ubuntu_packages }}"
         state: present
         update_cache: true
+
+    - name: Try to load KVM kernel modules
+      ansible.builtin.shell: |
+        set -euo pipefail
+        modprobe kvm || true
+        modprobe kvm_intel || modprobe kvm_amd || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Check KVM device after package install/module load
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: crc_kvm_device
+
+    - name: Assert KVM is available
+      ansible.builtin.assert:
+        that:
+          - crc_kvm_device.stat.exists
+        fail_msg: >-
+          Installed KVM/libvirt packages, but /dev/kvm is still missing. CRC requires hardware
+          virtualization exposed to the Ubuntu guest. Enable nested virtualization / host CPU
+          passthrough on the hypervisor, then rerun this playbook.
 
     - name: Enable libvirt and NetworkManager
       ansible.builtin.systemd_service:

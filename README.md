@@ -70,14 +70,14 @@ sudo apt-get install -y ansible sshpass
 
 WireGuard must be connected so the control machine can reach the target host.
 
-The Ubuntu VM must expose KVM/nested virtualization:
+The playbook installs KVM/libvirt packages and tries to load the KVM kernel modules. The Ubuntu VM must still expose virtualization from the hypervisor:
 
 ```bash
 test -e /dev/kvm
 grep -E '(vmx|svm)' /proc/cpuinfo
 ```
 
-On Proxmox/VMware/etc. this usually means host CPU passthrough and nested virtualization enabled.
+If `/dev/kvm` is still missing after package install, fix the hypervisor settings. On Proxmox/VMware/etc. this usually means host CPU passthrough and nested virtualization enabled.
 
 ## Pull secret
 

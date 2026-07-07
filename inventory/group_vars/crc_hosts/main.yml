@@ -33,7 +33,8 @@ crc_ubuntu_packages:
   - curl
   - tar
   - xz-utils
-  - qemu-kvm
+  - qemu-system-x86
+  - cpu-checker
   - libvirt-daemon-system
   - libvirt-clients
   - virtinst
