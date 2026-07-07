@@ -195,6 +195,8 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} setup"
       register: crc_setup
+      async: 7200
+      poll: 30
       changed_when: "'already' not in (crc_setup.stdout | lower)"
 
     - name: Stop existing CRC before forced recreate
@@ -255,25 +257,66 @@
       until: crc_api_ready.rc == 0
       changed_when: false
 
-    - name: Configure cluster apps domain
+    - name: Create cluster-scoped console and OAuth routes
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        oc patch ingresses.config.openshift.io cluster --type=merge -p '{"spec":{"domain":"{{ crc_apps_alias }}"}}'
-        oc patch ingresscontroller.operator default -n openshift-ingress-operator --type=merge -p '{"spec":{"domain":"{{ crc_apps_alias }}"}}'
+        cat <<'EOF' | oc apply -f -
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          name: console-{{ crc_cluster_name }}
+          namespace: openshift-console
+          labels:
+            app: console
+          annotations:
+            haproxy.router.openshift.io/timeout: 5m
+        spec:
+          host: {{ crc_console_alias }}
+          port:
+            targetPort: https
+          tls:
+            insecureEdgeTerminationPolicy: Redirect
+            termination: reencrypt
+          to:
+            kind: Service
+            name: console
+            weight: 100
+          wildcardPolicy: None
+        ---
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          name: oauth-openshift-{{ crc_cluster_name }}
+          namespace: openshift-authentication
+          labels:
+            app: oauth-openshift
+        spec:
+          host: {{ crc_oauth_alias }}
+          port:
+            targetPort: 6443
+          tls:
+            insecureEdgeTerminationPolicy: Redirect
+            termination: passthrough
+          to:
+            kind: Service
+            name: oauth-openshift
+            weight: 100
+          wildcardPolicy: None
+        EOF
       args:
         executable: /bin/bash
       when: crc_configure_cluster_apps_domain | bool
       changed_when: true
 
-    - name: Wait for console and OAuth routes on cluster apps domain
+    - name: Wait for console and OAuth cluster-scoped routes
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        test "$(oc -n openshift-console get route console -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
-        test "$(oc -n openshift-authentication get route oauth-openshift -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
+        test "$(oc -n openshift-console get route console-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
+        test "$(oc -n openshift-authentication get route oauth-openshift-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
       args:
         executable: /bin/bash
       register: crc_domain_routes

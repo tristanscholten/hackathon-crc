@@ -38,6 +38,7 @@ crc_ubuntu_packages:
   - xz-utils
   - qemu-kvm
   - qemu-system-x86
+  - virtiofsd
   - cpu-checker
   - libvirt-daemon
   - libvirt-daemon-system
