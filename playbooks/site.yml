@@ -186,6 +186,48 @@
       ansible.builtin.set_fact:
         crc_proxy_backend_ip: "{{ '127.0.0.1' if crc_network_mode == 'user' else crc_vm_ip }}"
 
+    - name: Wait for OpenShift API to answer
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$(crc oc-env)"
+        oc whoami --show-server
+      args:
+        executable: /bin/bash
+      register: crc_api_ready
+      retries: 40
+      delay: 15
+      until: crc_api_ready.rc == 0
+      changed_when: false
+
+    - name: Configure cluster apps domain
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$(crc oc-env)"
+        oc patch ingresses.config.openshift.io cluster --type=merge -p '{"spec":{"domain":"{{ crc_apps_alias }}"}}'
+        oc patch ingresscontroller.operator default -n openshift-ingress-operator --type=merge -p '{"spec":{"domain":"{{ crc_apps_alias }}"}}'
+      args:
+        executable: /bin/bash
+      when: crc_configure_cluster_apps_domain | bool
+      changed_when: true
+
+    - name: Wait for console and OAuth routes on cluster apps domain
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$(crc oc-env)"
+        test "$(oc -n openshift-console get route console -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
+        test "$(oc -n openshift-authentication get route oauth-openshift -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
+      args:
+        executable: /bin/bash
+      register: crc_domain_routes
+      retries: 40
+      delay: 15
+      until: crc_domain_routes.rc == 0
+      changed_when: false
+      when: crc_configure_cluster_apps_domain | bool
+
     - name: Install HAProxy config
       ansible.builtin.template:
         src: haproxy-crc.cfg.j2

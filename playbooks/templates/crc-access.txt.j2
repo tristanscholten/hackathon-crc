@@ -6,14 +6,13 @@ Canonical CRC names:
   API:     https://api.crc.testing:6443
   Console: https://console-openshift-console.apps-crc.testing
 
-Cluster-scoped aliases exposed by HAProxy/dnsmasq:
+Cluster-scoped names exposed by HAProxy/dnsmasq:
   API:     https://{{ crc_api_alias }}:6443
   Console: https://{{ crc_console_alias }}
+  OAuth:   https://{{ crc_oauth_alias }}
 
-Note: CRC/OpenShift certificates and routes are generated for the canonical
-crc.testing/apps-crc.testing names. For the cleanest UX, configure your client
-or DNS server to resolve api.crc.testing and *.apps-crc.testing to {{ crc_bind_address }}.
-The api/apps aliases route to the same cluster but may show certificate warnings.
+The playbook configures OpenShift's apps domain to {{ crc_apps_alias }} when
+crc_configure_cluster_apps_domain is enabled.
 
 Get credentials on the host:
   crc console --credentials
