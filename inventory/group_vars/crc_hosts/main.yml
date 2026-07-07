@@ -28,13 +28,16 @@ crc_dns_listen_addresses:
 crc_enable_dnsmasq: true
 crc_enable_haproxy: true
 crc_allow_passwordless_sudo_for_setup: true
+crc_reboot_after_package_install: true
 
 crc_ubuntu_packages:
   - curl
   - tar
   - xz-utils
+  - qemu-kvm
   - qemu-system-x86
   - cpu-checker
+  - libvirt-daemon
   - libvirt-daemon-system
   - libvirt-clients
   - virtinst

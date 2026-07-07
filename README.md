@@ -70,7 +70,13 @@ sudo apt-get install -y ansible sshpass
 
 WireGuard must be connected so the control machine can reach the target host.
 
-The playbook installs KVM/libvirt packages and tries to load the KVM kernel modules. The Ubuntu VM must still expose virtualization from the hypervisor:
+The playbook installs the CRC docs Ubuntu prerequisites before running `crc setup`:
+
+```bash
+sudo apt install qemu-kvm libvirt-daemon libvirt-daemon-system network-manager
+```
+
+It also installs supporting packages such as `libvirt-clients`, `virtinst`, `bridge-utils`, `dnsmasq`, and `haproxy`, then reboots after the first package install by default and tries to load the KVM kernel modules. The Ubuntu VM must still expose virtualization from the hypervisor:
 
 ```bash
 test -e /dev/kvm
