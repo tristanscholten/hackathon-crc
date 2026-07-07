@@ -26,6 +26,19 @@
         fail_msg: "Set CRC_PULL_SECRET_PATH or place the pull secret at {{ crc_pull_secret_src }}"
       no_log: true
 
+    - name: Check KVM device
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: crc_kvm_device
+
+    - name: Assert nested virtualization / KVM is available
+      ansible.builtin.assert:
+        that:
+          - crc_kvm_device.stat.exists
+        fail_msg: >-
+          CRC requires hardware virtualization. Enable nested virtualization / host CPU passthrough
+          for this VM so /dev/kvm exists.
+
   tasks:
     - name: Install Ubuntu packages
       ansible.builtin.apt:

@@ -13,10 +13,11 @@ On each Ubuntu host in `inventory/hosts.yml`:
 - CRC's user-networking router exposure for HTTP/HTTPS (`192.168.10.55:80/443`)
 - dnsmasq records for CRC names
 
-Default target:
+Default targets:
 
 ```text
 crc01 -> 192.168.10.55
+crc02 -> 192.168.10.56
 ```
 
 ## Do I need DNS?
@@ -50,7 +51,16 @@ api.crc01.testing    -> 192.168.10.55
 *.apps.crc01.testing -> 192.168.10.55
 ```
 
-The playbook installs `dnsmasq` on the CRC host. While connected to WireGuard, either use `192.168.10.55` as DNS or copy the same records into your existing DNS servers.
+For `crc02`, point DNS to:
+
+```text
+api.crc.testing      -> 192.168.10.56
+*.apps-crc.testing   -> 192.168.10.56
+api.crc02.testing    -> 192.168.10.56
+*.apps.crc02.testing -> 192.168.10.56
+```
+
+The playbook installs `dnsmasq` on the CRC host. While connected to WireGuard, either use the target host as DNS (`192.168.10.55` for crc01, `192.168.10.56` for crc02) or copy the same records into your existing DNS servers.
 
 ## Requirements on the control machine
 
@@ -59,6 +69,15 @@ sudo apt-get install -y ansible sshpass
 ```
 
 WireGuard must be connected so the control machine can reach the target host.
+
+The Ubuntu VM must expose KVM/nested virtualization:
+
+```bash
+test -e /dev/kvm
+grep -E '(vmx|svm)' /proc/cpuinfo
+```
+
+On Proxmox/VMware/etc. this usually means host CPU passthrough and nested virtualization enabled.
 
 ## Pull secret
 
@@ -73,7 +92,7 @@ chmod 600 "$CRC_PULL_SECRET_PATH"
 
 ## Inventory
 
-Edit `inventory/hosts.yml`:
+Edit `inventory/hosts.yml` if addresses/users change. The committed inventory already includes:
 
 ```yaml
 all:
@@ -85,6 +104,11 @@ all:
           ansible_user: lab
           crc_cluster_name: crc01
           crc_bind_address: 192.168.10.55
+        crc02:
+          ansible_host: 192.168.10.56
+          ansible_user: lab
+          crc_cluster_name: crc02
+          crc_bind_address: 192.168.10.56
 ```
 
 Add more hosts for more clusters:
