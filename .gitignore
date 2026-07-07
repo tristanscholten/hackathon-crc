@@ -1,0 +1,7 @@
+# Local secrets / runtime output
+.local/
+*.retry
+pull-secret.json
+
+# Ansible
+.ansible/

@@ -1,0 +1,42 @@
+---
+crc_version: "2.62.0"
+crc_mirror_base_url: "https://developers.redhat.com/content-gateway/file/pub/openshift-v4/clients/crc/{{ crc_version }}"
+crc_tarball_name: crc-linux-amd64.tar.xz
+
+# CRC canonical names are fixed by CRC/OpenShift Local.
+crc_base_domain: testing
+crc_api_alias: "api.{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_apps_alias: "apps.{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_console_alias: "console-openshift-console.apps.{{ crc_cluster_name }}.{{ crc_base_domain }}"
+
+crc_run_user: "{{ ansible_user }}"
+crc_run_home: "/home/{{ crc_run_user }}"
+crc_pull_secret_src: "{{ lookup('env', 'CRC_PULL_SECRET_PATH') | default('~/.hermes/secrets/hackathon-crc-pull-secret.json', true) | expanduser }}"
+crc_pull_secret_dest: "{{ crc_run_home }}/.crc-pull-secret.json"
+
+crc_cpus: 8
+crc_memory_mib: 24576
+crc_disk_size_gib: 35
+crc_force_recreate: false
+
+crc_network_mode: user
+crc_dns_listen_addresses:
+  - "127.0.0.1"
+  - "{{ crc_bind_address }}"
+crc_enable_dnsmasq: true
+crc_enable_haproxy: true
+crc_allow_passwordless_sudo_for_setup: true
+
+crc_ubuntu_packages:
+  - curl
+  - tar
+  - xz-utils
+  - qemu-kvm
+  - libvirt-daemon-system
+  - libvirt-clients
+  - virtinst
+  - bridge-utils
+  - libcap2-bin
+  - network-manager
+  - haproxy
+  - dnsmasq

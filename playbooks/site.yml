@@ -1,0 +1,233 @@
+---
+- name: Install and expose OpenShift CRC
+  hosts: crc_hosts
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert Ubuntu target
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == "Ubuntu"
+        fail_msg: "This playbook currently supports fresh Ubuntu hosts only."
+
+    - name: Assert pull secret exists on controller
+      ansible.builtin.stat:
+        path: "{{ crc_pull_secret_src }}"
+      delegate_to: localhost
+      become: false
+      register: crc_pull_secret_stat
+      no_log: true
+
+    - name: Fail when pull secret is missing
+      ansible.builtin.assert:
+        that:
+          - crc_pull_secret_stat.stat.exists
+        fail_msg: "Set CRC_PULL_SECRET_PATH or place the pull secret at {{ crc_pull_secret_src }}"
+      no_log: true
+
+  tasks:
+    - name: Install Ubuntu packages
+      ansible.builtin.apt:
+        name: "{{ crc_ubuntu_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Enable libvirt and NetworkManager
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - libvirtd
+        - NetworkManager
+
+    - name: Add CRC run user to virtualization groups
+      ansible.builtin.user:
+        name: "{{ crc_run_user }}"
+        groups: kvm,libvirt
+        append: true
+
+    - name: Allow CRC run user passwordless sudo for CRC setup/start helpers
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/99-crc-{{ crc_run_user }}"
+        mode: "0440"
+        content: "{{ crc_run_user }} ALL=(root) NOPASSWD:ALL\n"
+        validate: "visudo -cf %s"
+      when: crc_allow_passwordless_sudo_for_setup | bool
+
+    - name: Create CRC cache directory
+      ansible.builtin.file:
+        path: /opt/crc-cache
+        state: directory
+        mode: "0755"
+
+    - name: Read CRC checksum file
+      ansible.builtin.uri:
+        url: "{{ crc_mirror_base_url }}/sha256sum.txt"
+        return_content: true
+      register: crc_sha_file
+
+    - name: Extract Linux tarball checksum
+      ansible.builtin.set_fact:
+        crc_tarball_sha256: "{{ (crc_sha_file.content | regex_search('([a-f0-9]{64})\\s+crc-linux-amd64.tar.xz', '\\1'))[0] }}"
+
+    - name: Download CRC tarball
+      ansible.builtin.get_url:
+        url: "{{ crc_mirror_base_url }}/{{ crc_tarball_name }}"
+        dest: "/opt/crc-cache/{{ crc_tarball_name }}"
+        mode: "0644"
+        checksum: "sha256:{{ crc_tarball_sha256 }}"
+
+    - name: Install CRC under /opt
+      ansible.builtin.unarchive:
+        src: "/opt/crc-cache/{{ crc_tarball_name }}"
+        dest: /opt
+        remote_src: true
+        creates: "/opt/crc-linux-{{ crc_version }}-amd64/crc"
+
+    - name: Link crc binary
+      ansible.builtin.file:
+        src: "/opt/crc-linux-{{ crc_version }}-amd64/crc"
+        dest: /usr/local/bin/crc
+        state: link
+        force: true
+
+    - name: Allow CRC to bind privileged local ports in user network mode
+      community.general.capabilities:
+        path: "/opt/crc-linux-{{ crc_version }}-amd64/crc"
+        capability: cap_net_bind_service+ep
+        state: present
+      when: crc_network_mode == 'user'
+
+    - name: Copy pull secret for CRC user
+      ansible.builtin.copy:
+        src: "{{ crc_pull_secret_src }}"
+        dest: "{{ crc_pull_secret_dest }}"
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Configure CRC
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: "crc config set {{ item.key }} {{ item.value }}"
+      loop:
+        - { key: consent-telemetry, value: "no" }
+        - { key: disable-update-check, value: "true" }
+        - { key: preset, value: "openshift" }
+        - { key: network-mode, value: "{{ crc_network_mode }}" }
+        - { key: pull-secret-file, value: "{{ crc_pull_secret_dest }}" }
+        - { key: cpus, value: "{{ crc_cpus }}" }
+        - { key: memory, value: "{{ crc_memory_mib }}" }
+        - { key: disk-size, value: "{{ crc_disk_size_gib }}" }
+      changed_when: true
+
+    - name: Run crc setup
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: crc setup
+      register: crc_setup
+      changed_when: "'already' not in (crc_setup.stdout | lower)"
+
+    - name: Stop existing CRC before forced recreate
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: crc stop
+      when: crc_force_recreate | bool
+      failed_when: false
+      changed_when: true
+
+    - name: Delete existing CRC before forced recreate
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: crc delete -f
+      when: crc_force_recreate | bool
+      failed_when: false
+      changed_when: true
+
+    - name: Check CRC status
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: crc status --log-level error
+      register: crc_status
+      failed_when: false
+      changed_when: false
+
+    - name: Start CRC
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: "crc start -p {{ crc_pull_secret_dest }}"
+      when: "'Running' not in crc_status.stdout"
+      register: crc_start
+      async: 7200
+      poll: 30
+      no_log: true
+
+    - name: Get CRC IP
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: crc ip
+      register: crc_ip_cmd
+      changed_when: false
+
+    - name: Store CRC IP fact
+      ansible.builtin.set_fact:
+        crc_vm_ip: "{{ crc_ip_cmd.stdout | trim }}"
+
+    - name: Store proxy backend IP fact
+      ansible.builtin.set_fact:
+        crc_proxy_backend_ip: "{{ '127.0.0.1' if crc_network_mode == 'user' else crc_vm_ip }}"
+
+    - name: Install HAProxy config
+      ansible.builtin.template:
+        src: haproxy-crc.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        mode: "0644"
+      when: crc_enable_haproxy | bool
+      notify: Restart haproxy
+
+    - name: Install dnsmasq CRC config
+      ansible.builtin.template:
+        src: dnsmasq-crc.conf.j2
+        dest: /etc/dnsmasq.d/crc.conf
+        mode: "0644"
+      when: crc_enable_dnsmasq | bool
+      notify: Restart dnsmasq
+
+    - name: Enable HAProxy
+      ansible.builtin.systemd_service:
+        name: haproxy
+        state: started
+        enabled: true
+      when: crc_enable_haproxy | bool
+
+    - name: Enable dnsmasq
+      ansible.builtin.systemd_service:
+        name: dnsmasq
+        state: started
+        enabled: true
+      when: crc_enable_dnsmasq | bool
+
+    - name: Render remote access summary
+      ansible.builtin.template:
+        src: crc-access.txt.j2
+        dest: "{{ crc_run_home }}/crc-access-{{ crc_cluster_name }}.txt"
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0600"
+
+    - name: Show non-secret access summary
+      ansible.builtin.debug:
+        msg:
+          - "CRC VM IP: {{ crc_vm_ip }}"
+          - "DNS server: {{ crc_bind_address }}"
+          - "API alias: https://{{ crc_api_alias }}:6443"
+          - "Console alias: https://{{ crc_console_alias }}"
+          - "Canonical CRC API: https://api.crc.testing:6443"
+          - "Canonical CRC console: https://console-openshift-console.apps-crc.testing"
+
+  handlers:
+    - name: Restart haproxy
+      ansible.builtin.systemd_service:
+        name: haproxy
+        state: restarted
+
+    - name: Restart dnsmasq
+      ansible.builtin.systemd_service:
+        name: dnsmasq
+        state: restarted

@@ -1,0 +1,19 @@
+CRC cluster {{ crc_cluster_name }}
+
+DNS server for WireGuard clients: {{ crc_bind_address }}
+
+Canonical CRC names:
+  API:     https://api.crc.testing:6443
+  Console: https://console-openshift-console.apps-crc.testing
+
+Cluster-scoped aliases exposed by HAProxy/dnsmasq:
+  API:     https://{{ crc_api_alias }}:6443
+  Console: https://{{ crc_console_alias }}
+
+Note: CRC/OpenShift certificates and routes are generated for the canonical
+crc.testing/apps-crc.testing names. For the cleanest UX, configure your client
+or DNS server to resolve api.crc.testing and *.apps-crc.testing to {{ crc_bind_address }}.
+The api/apps aliases route to the same cluster but may show certificate warnings.
+
+Get credentials on the host:
+  crc console --credentials

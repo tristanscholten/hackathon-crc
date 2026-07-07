@@ -1,0 +1,39 @@
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    daemon
+    maxconn 4096
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 10s
+    timeout client 1m
+    timeout server 1m
+
+# In CRC user-networking mode, CRC already exposes the OpenShift router on
+# host ports 80/443. The API is local-only on 127.0.0.1:6443, so HAProxy
+# publishes it on the WireGuard/LAN-facing address.
+frontend crc_api
+    bind {{ crc_bind_address }}:6443
+    default_backend crc_api_backend
+
+backend crc_api_backend
+    server crc_api {{ crc_proxy_backend_ip }}:6443 check
+{% if crc_network_mode != 'user' %}
+
+frontend crc_router_https
+    bind {{ crc_bind_address }}:443
+    default_backend crc_router_https_backend
+
+backend crc_router_https_backend
+    server crc_router_https {{ crc_proxy_backend_ip }}:443 check
+
+frontend crc_router_http
+    bind {{ crc_bind_address }}:80
+    default_backend crc_router_http_backend
+
+backend crc_router_http_backend
+    server crc_router_http {{ crc_proxy_backend_ip }}:80 check
+{% endif %}
