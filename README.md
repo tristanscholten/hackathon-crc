@@ -6,7 +6,14 @@ Ansible playbook for installing OpenShift Local / CRC on fresh Ubuntu hosts and 
 
 On each Ubuntu host in `inventory/hosts.yml`:
 
-- CRC binary
+- downloads the latest CRC archive from Red Hat's `.../clients/crc/latest/crc-linux-amd64.tar.xz`
+- extracts it into `~/Downloads`
+- copies the `crc` executable into `~/bin`
+- adds `~/bin` to `.bashrc`
+- runs `crc config set consent-telemetry no` before start
+- runs `crc config set preset openshift` before start
+- runs `crc setup`
+- runs `crc start`
 - KVM/libvirt dependencies
 - OpenShift CRC VM
 - HAProxy TCP forwarding for the API server (`192.168.10.55:6443` -> `127.0.0.1:6443` in CRC user-networking mode)

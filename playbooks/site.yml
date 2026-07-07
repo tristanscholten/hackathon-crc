@@ -75,14 +75,11 @@
         path: /dev/kvm
       register: crc_kvm_device
 
-    - name: Assert KVM is available
-      ansible.builtin.assert:
-        that:
-          - crc_kvm_device.stat.exists
-        fail_msg: >-
-          Installed KVM/libvirt packages, but /dev/kvm is still missing. CRC requires hardware
-          virtualization exposed to the Ubuntu guest. Enable nested virtualization / host CPU
-          passthrough on the hypervisor, then rerun this playbook.
+    - name: Report KVM availability before crc setup
+      ansible.builtin.debug:
+        msg: >-
+          /dev/kvm {{ 'exists' if crc_kvm_device.stat.exists else 'is missing' }}.
+          Continuing to crc setup so CRC performs its own official prerequisite checks.
 
     - name: Enable libvirt and NetworkManager
       ansible.builtin.systemd_service:
@@ -107,46 +104,66 @@
         validate: "visudo -cf %s"
       when: crc_allow_passwordless_sudo_for_setup | bool
 
-    - name: Create CRC cache directory
+    - name: Create CRC download directory
       ansible.builtin.file:
-        path: /opt/crc-cache
+        path: "{{ crc_download_dir }}"
         state: directory
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
         mode: "0755"
 
-    - name: Read CRC checksum file
-      ansible.builtin.uri:
-        url: "{{ crc_mirror_base_url }}/sha256sum.txt"
-        return_content: true
-      register: crc_sha_file
-
-    - name: Extract Linux tarball checksum
-      ansible.builtin.set_fact:
-        crc_tarball_sha256: "{{ (crc_sha_file.content | regex_search('([a-f0-9]{64})\\s+crc-linux-amd64.tar.xz', '\\1'))[0] }}"
-
-    - name: Download CRC tarball
-      ansible.builtin.get_url:
-        url: "{{ crc_mirror_base_url }}/{{ crc_tarball_name }}"
-        dest: "/opt/crc-cache/{{ crc_tarball_name }}"
-        mode: "0644"
-        checksum: "sha256:{{ crc_tarball_sha256 }}"
-
-    - name: Install CRC under /opt
-      ansible.builtin.unarchive:
-        src: "/opt/crc-cache/{{ crc_tarball_name }}"
-        dest: /opt
-        remote_src: true
-        creates: "/opt/crc-linux-{{ crc_version }}-amd64/crc"
-
-    - name: Link crc binary
+    - name: Create CRC user bin directory
       ansible.builtin.file:
-        src: "/opt/crc-linux-{{ crc_version }}-amd64/crc"
-        dest: /usr/local/bin/crc
-        state: link
-        force: true
+        path: "{{ crc_user_bin_dir }}"
+        state: directory
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0755"
+
+    - name: Download latest CRC archive
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.get_url:
+        url: "{{ crc_archive_url }}"
+        dest: "{{ crc_download_dir }}/{{ crc_tarball_name }}"
+        mode: "0644"
+      register: crc_archive_download
+
+    - name: Check installed CRC executable
+      ansible.builtin.stat:
+        path: "{{ crc_command }}"
+      register: crc_binary
+
+    - name: Extract latest CRC archive and install executable into ~/bin
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "{{ crc_download_dir }}"/crc-linux-*-amd64
+        tar xvf "{{ crc_download_dir }}/{{ crc_tarball_name }}" -C "{{ crc_download_dir }}"
+        cp "{{ crc_download_dir }}"/crc-linux-*-amd64/crc "{{ crc_command }}"
+        chmod 0755 "{{ crc_command }}"
+      args:
+        executable: /bin/bash
+      when: crc_archive_download.changed or not crc_binary.stat.exists
+      changed_when: true
+
+    - name: Add ~/bin to PATH in shell profile
+      ansible.builtin.lineinfile:
+        path: "{{ crc_run_home }}/.bashrc"
+        line: 'export PATH=$PATH:$HOME/bin'
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0644"
+        create: true
+
+    - name: Show CRC version
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: "{{ crc_command }} version"
+      register: crc_version_cmd
+      changed_when: false
 
     - name: Allow CRC to bind privileged local ports in user network mode
       community.general.capabilities:
-        path: "/opt/crc-linux-{{ crc_version }}-amd64/crc"
+        path: "{{ crc_command }}"
         capability: cap_net_bind_service+ep
         state: present
       when: crc_network_mode == 'user'
@@ -162,7 +179,7 @@
 
     - name: Configure CRC
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: "crc config set {{ item.key }} {{ item.value }}"
+      ansible.builtin.command: "{{ crc_command }} config set {{ item.key }} {{ item.value }}"
       loop:
         - { key: consent-telemetry, value: "no" }
         - { key: disable-update-check, value: "true" }
@@ -176,34 +193,34 @@
 
     - name: Run crc setup
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: crc setup
+      ansible.builtin.command: "{{ crc_command }} setup"
       register: crc_setup
       changed_when: "'already' not in (crc_setup.stdout | lower)"
 
     - name: Stop existing CRC before forced recreate
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: crc stop
+      ansible.builtin.command: "{{ crc_command }} stop"
       when: crc_force_recreate | bool
       failed_when: false
       changed_when: true
 
     - name: Delete existing CRC before forced recreate
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: crc delete -f
+      ansible.builtin.command: "{{ crc_command }} delete -f"
       when: crc_force_recreate | bool
       failed_when: false
       changed_when: true
 
     - name: Check CRC status
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: crc status --log-level error
+      ansible.builtin.command: "{{ crc_command }} status --log-level error"
       register: crc_status
       failed_when: false
       changed_when: false
 
     - name: Start CRC
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: "crc start -p {{ crc_pull_secret_dest }}"
+      ansible.builtin.command: "{{ crc_command }} start -p {{ crc_pull_secret_dest }}"
       when: "'Running' not in crc_status.stdout"
       register: crc_start
       async: 7200
@@ -212,7 +229,7 @@
 
     - name: Get CRC IP
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: crc ip
+      ansible.builtin.command: "{{ crc_command }} ip"
       register: crc_ip_cmd
       changed_when: false
 
@@ -228,7 +245,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$(crc oc-env)"
+        eval "$({{ crc_command }} oc-env)"
         oc whoami --show-server
       args:
         executable: /bin/bash
@@ -242,7 +259,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$(crc oc-env)"
+        eval "$({{ crc_command }} oc-env)"
         oc patch ingresses.config.openshift.io cluster --type=merge -p '{"spec":{"domain":"{{ crc_apps_alias }}"}}'
         oc patch ingresscontroller.operator default -n openshift-ingress-operator --type=merge -p '{"spec":{"domain":"{{ crc_apps_alias }}"}}'
       args:
@@ -254,7 +271,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$(crc oc-env)"
+        eval "$({{ crc_command }} oc-env)"
         test "$(oc -n openshift-console get route console -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
         test "$(oc -n openshift-authentication get route oauth-openshift -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
       args:
