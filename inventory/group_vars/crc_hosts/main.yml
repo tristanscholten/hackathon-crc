@@ -4,13 +4,16 @@ oc_archive_url: "https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest
 crc_tarball_name: crc-linux-amd64.tar.xz
 oc_tarball_name: oc.tar.gz
 
-# CRC canonical names are fixed by CRC/OpenShift Local.
+# CRC canonical names are fixed by CRC/OpenShift Local; these aliases are configurable.
 crc_base_domain: testing
-crc_api_alias: "api.{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_apps_alias: "apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_console_alias: "console-openshift-console.apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_oauth_alias: "oauth-openshift.apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_configure_cluster_apps_domain: true
+crc_api_domain: "{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_apps_domain: "apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_api_alias: "api.{{ crc_api_domain }}"
+crc_apps_alias: "{{ crc_apps_domain }}"
+crc_console_alias: "console-openshift-console.{{ crc_apps_domain }}"
+crc_oauth_alias: "oauth-openshift.{{ crc_apps_domain }}"
+crc_domain_secret_name: "{{ crc_cluster_name }}-domain-tls"
+crc_configure_custom_domains: true
 
 crc_run_user: "{{ ansible_user }}"
 crc_run_home: "/home/{{ crc_run_user }}"
@@ -18,6 +21,8 @@ crc_download_dir: "{{ crc_run_home }}/Downloads"
 crc_user_bin_dir: "{{ crc_run_home }}/bin"
 crc_command: "{{ crc_user_bin_dir }}/crc"
 oc_command: "{{ crc_user_bin_dir }}/oc"
+local_oc_dir: "{{ playbook_dir }}/../.local/bin"
+local_oc_command: "{{ local_oc_dir }}/oc"
 crc_pull_secret_src: "{{ lookup('env', 'CRC_PULL_SECRET_PATH') | default('~/.hermes/secrets/hackathon-crc-pull-secret.json', true) | expanduser }}"
 crc_pull_secret_dest: "{{ crc_run_home }}/.crc-pull-secret.json"
 
@@ -39,6 +44,7 @@ crc_ubuntu_packages:
   - curl
   - tar
   - xz-utils
+  - openssl
   - qemu-kvm
   - qemu-system-x86
   - virtiofsd

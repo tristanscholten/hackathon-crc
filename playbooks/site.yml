@@ -273,6 +273,32 @@
       ansible.builtin.set_fact:
         crc_proxy_backend_ip: "{{ '127.0.0.1' if crc_network_mode == 'user' else crc_vm_ip }}"
 
+    - name: Install dnsmasq CRC config before cluster domain changes
+      ansible.builtin.template:
+        src: dnsmasq-crc.conf.j2
+        dest: /etc/dnsmasq.d/crc.conf
+        mode: "0644"
+      when: crc_enable_dnsmasq | bool
+      notify: Restart dnsmasq
+
+    - name: Enable dnsmasq before cluster domain changes
+      ansible.builtin.systemd_service:
+        name: dnsmasq
+        state: started
+        enabled: true
+      when: crc_enable_dnsmasq | bool
+
+    - name: Add exact custom CRC names to host resolver
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED CRC {{ crc_cluster_name }} DOMAINS"
+        block: |
+          127.0.0.1 {{ crc_api_alias }} {{ crc_console_alias }} {{ crc_oauth_alias }}
+      when: crc_configure_custom_domains | bool
+
+    - name: Apply DNS handler before cluster domain changes
+      ansible.builtin.meta: flush_handlers
+
     - name: Wait for OpenShift API to answer
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
@@ -287,82 +313,136 @@
       until: crc_api_ready.rc == 0
       changed_when: false
 
-    - name: Create cluster-scoped console and OAuth routes
+    - name: Configure cluster DNS forwarding for custom CRC domains
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        cat <<'EOF' | {{ oc_command }} apply -f -
-        apiVersion: route.openshift.io/v1
-        kind: Route
-        metadata:
-          name: console-{{ crc_cluster_name }}
-          namespace: openshift-console
-          labels:
-            app: console
-          annotations:
-            haproxy.router.openshift.io/timeout: 5m
-        spec:
-          host: {{ crc_console_alias }}
-          port:
-            targetPort: https
-          tls:
-            insecureEdgeTerminationPolicy: Redirect
-            termination: reencrypt
-          to:
-            kind: Service
-            name: console
-            weight: 100
-          wildcardPolicy: None
-        ---
-        apiVersion: route.openshift.io/v1
-        kind: Route
-        metadata:
-          name: oauth-openshift-{{ crc_cluster_name }}
-          namespace: openshift-authentication
-          labels:
-            app: oauth-openshift
-        spec:
-          host: {{ crc_oauth_alias }}
-          port:
-            targetPort: 6443
-          tls:
-            insecureEdgeTerminationPolicy: Redirect
-            termination: passthrough
-          to:
-            kind: Service
-            name: oauth-openshift
-            weight: 100
-          wildcardPolicy: None
-        EOF
+        "{{ oc_command }}" patch dns.operator/default --type=merge -p '{"spec":{"servers":[{"name":"{{ crc_cluster_name }}-custom-domains","zones":["{{ crc_api_domain }}","{{ crc_apps_domain }}"],"forwardPlugin":{"upstreams":["{{ crc_bind_address }}"]}}]}}'
       args:
         executable: /bin/bash
-      when: crc_configure_cluster_apps_domain | bool
+      when: crc_configure_custom_domains | bool
       changed_when: true
 
-    - name: Wait for console and OAuth cluster-scoped routes
+    - name: Wait for cluster DNS forwarding config
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        test "$({{ oc_command }} -n openshift-console get route console-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
-        test "$({{ oc_command }} -n openshift-authentication get route oauth-openshift-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
+        "{{ oc_command }}" get dns.operator/default -o jsonpath='{.spec.servers[*].zones[*]}' | grep -qw '{{ crc_api_domain }}'
+        "{{ oc_command }}" get dns.operator/default -o jsonpath='{.spec.servers[*].zones[*]}' | grep -qw '{{ crc_apps_domain }}'
       args:
         executable: /bin/bash
-      register: crc_domain_routes
+      register: crc_dns_forward_ready
       retries: 40
       delay: 15
-      until: crc_domain_routes.rc == 0
+      until: crc_dns_forward_ready.rc == 0
       changed_when: false
-      when: crc_configure_cluster_apps_domain | bool
+      when: crc_configure_custom_domains | bool
 
-    - name: Verify OpenShift CLI can login as developer
+    - name: Generate custom domain certificate
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -newkey
+          - rsa:2048
+          - -new
+          - -nodes
+          - -x509
+          - -days
+          - "3650"
+          - -keyout
+          - "{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.key"
+          - -out
+          - "{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt"
+          - -subj
+          - "/CN={{ crc_api_domain }}"
+          - -addext
+          - "subjectAltName=DNS:{{ crc_api_alias }},DNS:{{ crc_api_domain }},DNS:*.{{ crc_api_domain }},DNS:{{ crc_apps_domain }},DNS:*.{{ crc_apps_domain }}"
+      when: crc_configure_custom_domains | bool
+      changed_when: true
+
+    - name: Apply custom domain TLS secret
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$({{ crc_command }} oc-env)"
+        "{{ oc_command }}" create secret tls "{{ crc_domain_secret_name }}" \
+          --cert="{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt" \
+          --key="{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.key" \
+          -n openshift-config \
+          --dry-run=client -o yaml | "{{ oc_command }}" apply -f -
+      args:
+        executable: /bin/bash
+      when: crc_configure_custom_domains | bool
+      changed_when: true
+
+    - name: Configure OpenShift custom API and apps domains
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$({{ crc_command }} oc-env)"
+        cat > /tmp/crc-ingress-patch.yaml <<'EOF'
+        spec:
+          appsDomain: {{ crc_apps_domain }}
+          componentRoutes:
+          - hostname: {{ crc_console_alias }}
+            name: console
+            namespace: openshift-console
+            servingCertKeyPairSecret:
+              name: {{ crc_domain_secret_name }}
+          - hostname: {{ crc_oauth_alias }}
+            name: oauth-openshift
+            namespace: openshift-authentication
+            servingCertKeyPairSecret:
+              name: {{ crc_domain_secret_name }}
+        EOF
+        "{{ oc_command }}" patch ingresses.config.openshift.io cluster --type=merge --patch-file=/tmp/crc-ingress-patch.yaml
+        "{{ oc_command }}" patch apiserver cluster --type=merge -p '{"spec":{"servingCerts":{"namedCertificates":[{"names":["{{ crc_api_alias }}"],"servingCertificate":{"name":"{{ crc_domain_secret_name }}"}}]}}}'
+      args:
+        executable: /bin/bash
+      when: crc_configure_custom_domains | bool
+      changed_when: true
+
+    - name: Remove legacy manually-created route aliases
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$({{ crc_command }} oc-env)"
+        "{{ oc_command }}" -n openshift-console delete route "console-{{ crc_cluster_name }}" --ignore-not-found=true
+        "{{ oc_command }}" -n openshift-authentication delete route "oauth-openshift-{{ crc_cluster_name }}" --ignore-not-found=true
+      args:
+        executable: /bin/bash
+      when: crc_configure_custom_domains | bool
+      changed_when: true
+
+    - name: Wait for configured API, console, and OAuth domains
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$({{ crc_command }} oc-env)"
+        test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.appsDomain}')" = "{{ crc_apps_domain }}"
+        test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.componentRoutes[?(@.name=="console")].hostname}')" = "{{ crc_console_alias }}"
+        test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.componentRoutes[?(@.name=="oauth-openshift")].hostname}')" = "{{ crc_oauth_alias }}"
+        {{ oc_command }} get apiserver cluster -o jsonpath='{.spec.servingCerts.namedCertificates[*].names[*]}' | grep -qw '{{ crc_api_alias }}'
+      args:
+        executable: /bin/bash
+      register: crc_custom_domain_config
+      retries: 40
+      delay: 15
+      until: crc_custom_domain_config.rc == 0
+      changed_when: false
+      when: crc_configure_custom_domains | bool
+
+    - name: Verify OpenShift CLI can login as developer inside CRC host
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
         rm -f "{{ crc_run_home }}/.crc-developer-kubeconfig"
         KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" \
-          "{{ oc_command }}" login -u developer -p developer https://api.crc.testing:6443 --insecure-skip-tls-verify=true
+          "{{ oc_command }}" login -u developer -p developer https://{{ crc_api_alias }}:6443 --insecure-skip-tls-verify=true
         test "$(KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" "{{ oc_command }}" whoami)" = developer
       args:
         executable: /bin/bash
@@ -398,6 +478,21 @@
       until: crc_oauth_health_check.rc == 0
       changed_when: false
 
+    - name: Wait for cluster operators to settle
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        eval "$({{ crc_command }} oc-env)"
+        bad="$({{ oc_command }} get co --no-headers | awk '$3 != "True" || $4 != "False" || $5 != "False" {print}')"
+        test -z "$bad"
+      args:
+        executable: /bin/bash
+      register: crc_cluster_operators_ready
+      retries: 60
+      delay: 20
+      until: crc_cluster_operators_ready.rc == 0
+      changed_when: false
+
     - name: Install HAProxy config
       ansible.builtin.template:
         src: haproxy-crc.cfg.j2
@@ -427,6 +522,74 @@
         state: started
         enabled: true
       when: crc_enable_dnsmasq | bool
+
+    - name: Apply pending proxy and DNS handlers before controller-side verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Create local OpenShift CLI directory on Ansible controller
+      ansible.builtin.file:
+        path: "{{ local_oc_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Download OpenShift CLI on Ansible controller
+      ansible.builtin.get_url:
+        url: "{{ oc_archive_url }}"
+        dest: "{{ local_oc_dir }}/{{ oc_tarball_name }}"
+        mode: "0644"
+      register: local_oc_archive_download
+      delegate_to: localhost
+      become: false
+
+    - name: Check local OpenShift CLI executable
+      ansible.builtin.stat:
+        path: "{{ local_oc_command }}"
+      register: local_oc_binary
+      delegate_to: localhost
+      become: false
+
+    - name: Extract OpenShift CLI on Ansible controller
+      ansible.builtin.command: >-
+        tar xvf {{ local_oc_dir }}/{{ oc_tarball_name }} -C {{ local_oc_dir }} oc kubectl
+      when: local_oc_archive_download.changed or not local_oc_binary.stat.exists
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Verify local OpenShift CLI can login through custom API domain
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -f "{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}"
+        KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}" \
+          "{{ local_oc_command }}" login -u developer -p developer "https://{{ crc_api_alias }}:6443" --insecure-skip-tls-verify=true
+        test "$(KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}" "{{ local_oc_command }}" whoami)" = developer
+        KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}" \
+          "{{ local_oc_command }}" get --raw=/version >/tmp/{{ crc_cluster_name }}-oc-version.json
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      no_log: true
+
+    - name: Verify custom domains from Ansible controller
+      ansible.builtin.shell: |
+        set -euo pipefail
+        getent hosts "{{ crc_api_alias }}"
+        getent hosts "test.{{ crc_api_domain }}"
+        getent hosts "{{ crc_console_alias }}"
+        getent hosts "test.{{ crc_apps_domain }}"
+        curl -kfsS "https://{{ crc_api_alias }}:6443/version" >/tmp/{{ crc_cluster_name }}-api-version.json
+        curl -kfsS -L "https://{{ crc_console_alias }}/" -o /tmp/{{ crc_cluster_name }}-console.html
+        grep -q 'Red Hat OpenShift' /tmp/{{ crc_cluster_name }}-console.html
+        test "$(curl -kfsS "https://{{ crc_oauth_alias }}/healthz")" = ok
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
 
     - name: Render remote access summary
       ansible.builtin.template:
