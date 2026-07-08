@@ -1,6 +1,8 @@
 ---
 crc_archive_url: "https://developers.redhat.com/content-gateway/rest/mirror/pub/openshift-v4/clients/crc/latest/crc-linux-amd64.tar.xz"
+oc_archive_url: "https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz"
 crc_tarball_name: crc-linux-amd64.tar.xz
+oc_tarball_name: oc.tar.gz
 
 # CRC canonical names are fixed by CRC/OpenShift Local.
 crc_base_domain: testing
@@ -15,6 +17,7 @@ crc_run_home: "/home/{{ crc_run_user }}"
 crc_download_dir: "{{ crc_run_home }}/Downloads"
 crc_user_bin_dir: "{{ crc_run_home }}/bin"
 crc_command: "{{ crc_user_bin_dir }}/crc"
+oc_command: "{{ crc_user_bin_dir }}/oc"
 crc_pull_secret_src: "{{ lookup('env', 'CRC_PULL_SECRET_PATH') | default('~/.hermes/secrets/hackathon-crc-pull-secret.json', true) | expanduser }}"
 crc_pull_secret_dest: "{{ crc_run_home }}/.crc-pull-secret.json"
 

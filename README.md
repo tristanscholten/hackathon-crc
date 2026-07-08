@@ -14,6 +14,10 @@ On each Ubuntu host in `inventory/hosts.yml`:
 - runs `crc config set preset openshift` before start
 - runs `crc setup`
 - runs `crc start`
+- downloads the latest `oc`/`kubectl` archive from `https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz`
+- extracts `oc` and `kubectl` into `~/bin`
+- runs `oc login` as `developer` against the CRC API
+- verifies the console UI and OAuth health route over HTTPS
 - KVM/libvirt dependencies
 - OpenShift CRC VM
 - HAProxy TCP forwarding for the API server (`192.168.10.55:6443` -> `127.0.0.1:6443` in CRC user-networking mode)

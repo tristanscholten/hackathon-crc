@@ -146,6 +146,30 @@
       when: crc_archive_download.changed or not crc_binary.stat.exists
       changed_when: true
 
+    - name: Download latest OpenShift CLI archive
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.get_url:
+        url: "{{ oc_archive_url }}"
+        dest: "{{ crc_download_dir }}/{{ oc_tarball_name }}"
+        mode: "0644"
+      register: oc_archive_download
+
+    - name: Check installed OpenShift CLI executable
+      ansible.builtin.stat:
+        path: "{{ oc_command }}"
+      register: oc_binary
+
+    - name: Extract latest OpenShift CLI into ~/bin
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tar xvf "{{ crc_download_dir }}/{{ oc_tarball_name }}" -C "{{ crc_user_bin_dir }}" oc kubectl
+        chmod 0755 "{{ crc_user_bin_dir }}/oc" "{{ crc_user_bin_dir }}/kubectl"
+      args:
+        executable: /bin/bash
+      when: oc_archive_download.changed or not oc_binary.stat.exists
+      changed_when: true
+
     - name: Add ~/bin to PATH in shell profile
       ansible.builtin.lineinfile:
         path: "{{ crc_run_home }}/.bashrc"
@@ -159,6 +183,12 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} version"
       register: crc_version_cmd
+      changed_when: false
+
+    - name: Show OpenShift CLI version
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: "{{ oc_command }} version --client=true"
+      register: oc_version_cmd
       changed_when: false
 
     - name: Allow CRC to bind privileged local ports in user network mode
@@ -248,7 +278,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        oc get clusterversion version -o name
+        {{ oc_command }} get clusterversion version -o name
       args:
         executable: /bin/bash
       register: crc_api_ready
@@ -262,7 +292,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        cat <<'EOF' | oc apply -f -
+        cat <<'EOF' | {{ oc_command }} apply -f -
         apiVersion: route.openshift.io/v1
         kind: Route
         metadata:
@@ -315,8 +345,8 @@
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        test "$(oc -n openshift-console get route console-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
-        test "$(oc -n openshift-authentication get route oauth-openshift-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
+        test "$({{ oc_command }} -n openshift-console get route console-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_console_alias }}"
+        test "$({{ oc_command }} -n openshift-authentication get route oauth-openshift-{{ crc_cluster_name }} -o jsonpath='{.spec.host}')" = "{{ crc_oauth_alias }}"
       args:
         executable: /bin/bash
       register: crc_domain_routes
@@ -325,6 +355,48 @@
       until: crc_domain_routes.rc == 0
       changed_when: false
       when: crc_configure_cluster_apps_domain | bool
+
+    - name: Verify OpenShift CLI can login as developer
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -f "{{ crc_run_home }}/.crc-developer-kubeconfig"
+        KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" \
+          "{{ oc_command }}" login -u developer -p developer https://api.crc.testing:6443 --insecure-skip-tls-verify=true
+        test "$(KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" "{{ oc_command }}" whoami)" = developer
+      args:
+        executable: /bin/bash
+      changed_when: false
+      no_log: true
+
+    - name: Verify console UI route is accessible
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -kfsS --resolve "{{ crc_console_alias }}:443:127.0.0.1" \
+          -o /tmp/crc-console-ui-test.html \
+          "https://{{ crc_console_alias }}/"
+        grep -q 'Red Hat OpenShift' /tmp/crc-console-ui-test.html
+      args:
+        executable: /bin/bash
+      register: crc_console_ui_check
+      retries: 40
+      delay: 15
+      until: crc_console_ui_check.rc == 0
+      changed_when: false
+
+    - name: Verify OAuth route health endpoint is accessible
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        test "$(curl -kfsS --resolve "{{ crc_oauth_alias }}:443:127.0.0.1" "https://{{ crc_oauth_alias }}/healthz")" = ok
+      args:
+        executable: /bin/bash
+      register: crc_oauth_health_check
+      retries: 40
+      delay: 15
+      until: crc_oauth_health_check.rc == 0
+      changed_when: false
 
     - name: Install HAProxy config
       ansible.builtin.template:
