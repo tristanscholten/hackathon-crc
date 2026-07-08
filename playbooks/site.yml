@@ -248,7 +248,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         eval "$({{ crc_command }} oc-env)"
-        oc whoami --show-server
+        oc get clusterversion version -o name
       args:
         executable: /bin/bash
       register: crc_api_ready

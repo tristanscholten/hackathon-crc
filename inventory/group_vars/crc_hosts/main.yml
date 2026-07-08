@@ -5,9 +5,9 @@ crc_tarball_name: crc-linux-amd64.tar.xz
 # CRC canonical names are fixed by CRC/OpenShift Local.
 crc_base_domain: testing
 crc_api_alias: "api.{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_apps_alias: "apps.{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_console_alias: "console-openshift-console.apps.{{ crc_cluster_name }}.{{ crc_base_domain }}"
-crc_oauth_alias: "oauth-openshift.apps.{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_apps_alias: "apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_console_alias: "console-openshift-console.apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
+crc_oauth_alias: "oauth-openshift.apps-{{ crc_cluster_name }}.{{ crc_base_domain }}"
 crc_configure_cluster_apps_domain: true
 
 crc_run_user: "{{ ansible_user }}"
