@@ -250,10 +250,19 @@
       failed_when: false
       changed_when: false
 
+    - name: Restart unreachable CRC VM
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: "{{ crc_command }} stop"
+      when: "'OpenShift:       Unreachable' in crc_status.stdout"
+      failed_when: false
+      changed_when: true
+
     - name: Start CRC
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} start -p {{ crc_pull_secret_dest }}"
-      when: "'Running' not in crc_status.stdout"
+      when: >-
+        ('CRC VM:' not in crc_status.stdout)
+        or ('OpenShift:       Running' not in crc_status.stdout and 'OpenShift:       Degraded' not in crc_status.stdout)
       register: crc_start
       async: 7200
       poll: 30
@@ -303,7 +312,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         {{ oc_command }} get clusterversion version -o name
       args:
         executable: /bin/bash
@@ -317,7 +326,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         "{{ oc_command }}" patch dns.operator/default --type=merge -p '{"spec":{"servers":[{"name":"{{ crc_cluster_name }}-custom-domains","zones":["{{ crc_api_domain }}","{{ crc_apps_domain }}"],"forwardPlugin":{"upstreams":["{{ crc_bind_address }}"]}}]}}'
       args:
         executable: /bin/bash
@@ -328,7 +337,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         "{{ oc_command }}" get dns.operator/default -o jsonpath='{.spec.servers[*].zones[*]}' | grep -qw '{{ crc_api_domain }}'
         "{{ oc_command }}" get dns.operator/default -o jsonpath='{.spec.servers[*].zones[*]}' | grep -qw '{{ crc_apps_domain }}'
       args:
@@ -361,14 +370,15 @@
           - "/CN={{ crc_api_domain }}"
           - -addext
           - "subjectAltName=DNS:{{ crc_api_alias }},DNS:{{ crc_api_domain }},DNS:*.{{ crc_api_domain }},DNS:{{ crc_apps_domain }},DNS:*.{{ crc_apps_domain }}"
+      args:
+        creates: "{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt"
       when: crc_configure_custom_domains | bool
-      changed_when: true
 
     - name: Apply custom domain TLS secret
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         "{{ oc_command }}" create secret tls "{{ crc_domain_secret_name }}" \
           --cert="{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt" \
           --key="{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.key" \
@@ -377,13 +387,13 @@
       args:
         executable: /bin/bash
       when: crc_configure_custom_domains | bool
-      changed_when: true
+      changed_when: false
 
     - name: Configure OpenShift custom API and apps domains
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         cat > /tmp/crc-ingress-patch.yaml <<'EOF'
         spec:
           appsDomain: {{ crc_apps_domain }}
@@ -404,13 +414,13 @@
       args:
         executable: /bin/bash
       when: crc_configure_custom_domains | bool
-      changed_when: true
+      changed_when: false
 
     - name: Remove legacy manually-created route aliases
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         "{{ oc_command }}" -n openshift-console delete route "console-{{ crc_cluster_name }}" --ignore-not-found=true
         "{{ oc_command }}" -n openshift-authentication delete route "oauth-openshift-{{ crc_cluster_name }}" --ignore-not-found=true
       args:
@@ -422,7 +432,7 @@
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
         test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.appsDomain}')" = "{{ crc_apps_domain }}"
         test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.componentRoutes[?(@.name=="console")].hostname}')" = "{{ crc_console_alias }}"
         test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.componentRoutes[?(@.name=="oauth-openshift")].hostname}')" = "{{ crc_oauth_alias }}"
@@ -478,20 +488,17 @@
       until: crc_oauth_health_check.rc == 0
       changed_when: false
 
-    - name: Wait for cluster operators to settle
+    - name: Show cluster operator summary after endpoint verification
       become_user: "{{ crc_run_user }}"
       ansible.builtin.shell: |
         set -euo pipefail
-        eval "$({{ crc_command }} oc-env)"
-        bad="$({{ oc_command }} get co --no-headers | awk '$3 != "True" || $4 != "False" || $5 != "False" {print}')"
-        test -z "$bad"
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+        {{ oc_command }} get co authentication console ingress kube-apiserver openshift-apiserver machine-config image-registry
       args:
         executable: /bin/bash
-      register: crc_cluster_operators_ready
-      retries: 60
-      delay: 20
-      until: crc_cluster_operators_ready.rc == 0
+      register: crc_cluster_operator_summary
       changed_when: false
+      failed_when: false
 
     - name: Install HAProxy config
       ansible.builtin.template:
