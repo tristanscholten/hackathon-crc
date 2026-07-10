@@ -191,6 +191,56 @@
       register: oc_version_cmd
       changed_when: false
 
+    - name: Ensure CRC cache backing directory is outside the small home LV
+      ansible.builtin.file:
+        path: "{{ crc_cache_dir }}"
+        state: directory
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0775"
+
+    - name: Check CRC cache path
+      ansible.builtin.stat:
+        path: "{{ crc_run_home }}/.crc/cache"
+      register: crc_cache_path
+
+    - name: Move existing CRC cache into backing directory
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if mountpoint -q "{{ crc_run_home }}/.crc/cache"; then
+          exit 0
+        fi
+        if [ -d "{{ crc_run_home }}/.crc/cache" ] && [ ! -L "{{ crc_run_home }}/.crc/cache" ]; then
+          sudo -u "{{ crc_run_user }}" "{{ crc_command }}" stop || true
+          rsync -aH "{{ crc_run_home }}/.crc/cache/" "{{ crc_cache_dir }}/"
+          rm -rf "{{ crc_run_home }}/.crc/cache"
+        fi
+        if [ -L "{{ crc_run_home }}/.crc/cache" ]; then
+          rm -f "{{ crc_run_home }}/.crc/cache"
+        fi
+        mkdir -p "{{ crc_run_home }}/.crc/cache"
+        chown "{{ crc_run_user }}:{{ crc_run_user }}" "{{ crc_run_home }}/.crc" "{{ crc_run_home }}/.crc/cache"
+      args:
+        executable: /bin/bash
+      changed_when: crc_cache_path.stat.exists and not crc_cache_path.stat.isdir
+
+    - name: Bind mount CRC cache backing directory
+      ansible.posix.mount:
+        path: "{{ crc_run_home }}/.crc/cache"
+        src: "{{ crc_cache_dir }}"
+        fstype: none
+        opts: bind
+        state: mounted
+
+    - name: Ensure CRC cache is readable by libvirt/qemu
+      ansible.builtin.file:
+        path: "{{ crc_cache_dir }}"
+        state: directory
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0755"
+        recurse: true
+
     - name: Allow CRC to bind privileged local ports in user network mode
       community.general.capabilities:
         path: "{{ crc_command }}"
@@ -560,10 +610,9 @@
     - name: Extract OpenShift CLI on Ansible controller
       ansible.builtin.command: >-
         tar xvf {{ local_oc_dir }}/{{ oc_tarball_name }} -C {{ local_oc_dir }} oc kubectl
-      when: local_oc_archive_download.changed or not local_oc_binary.stat.exists
       delegate_to: localhost
       become: false
-      changed_when: true
+      changed_when: local_oc_archive_download.changed or not local_oc_binary.stat.exists
 
     - name: Verify local OpenShift CLI can login through custom API domain
       ansible.builtin.shell: |
@@ -611,10 +660,9 @@
         msg:
           - "CRC VM IP: {{ crc_vm_ip }}"
           - "DNS server: {{ crc_bind_address }}"
-          - "API alias: https://{{ crc_api_alias }}:6443"
-          - "Console alias: https://{{ crc_console_alias }}"
-          - "Canonical CRC API: https://api.crc.testing:6443"
-          - "Canonical CRC console: https://console-openshift-console.apps-crc.testing"
+          - "API: https://{{ crc_api_alias }}:6443"
+          - "Console: https://{{ crc_console_alias }}"
+          - "OAuth: https://{{ crc_oauth_alias }}"
 
   handlers:
     - name: Restart haproxy

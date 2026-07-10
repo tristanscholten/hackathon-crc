@@ -19,6 +19,7 @@ crc_run_user: "{{ ansible_user }}"
 crc_run_home: "/home/{{ crc_run_user }}"
 crc_download_dir: "{{ crc_run_home }}/Downloads"
 crc_user_bin_dir: "{{ crc_run_home }}/bin"
+crc_cache_dir: /var/lib/crc-cache-{{ crc_run_user }}
 crc_command: "{{ crc_user_bin_dir }}/crc"
 oc_command: "{{ crc_user_bin_dir }}/oc"
 local_oc_dir: "{{ playbook_dir }}/../.local/bin"
@@ -45,6 +46,7 @@ crc_ubuntu_packages:
   - tar
   - xz-utils
   - openssl
+  - rsync
   - qemu-kvm
   - qemu-system-x86
   - virtiofsd

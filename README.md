@@ -36,14 +36,7 @@ crc02 -> 192.168.10.56
 
 Yes. Clients need DNS for the CRC names.
 
-CRC starts with these canonical names:
-
-```text
-api.crc.testing
-*.apps-crc.testing
-```
-
-This playbook also exposes configurable cluster domains. Defaults:
+The public/client-facing names are configurable per cluster. Defaults:
 
 ```text
 api.crc01.testing
@@ -72,7 +65,6 @@ Following the CRC engineering docs, the playbook configures:
 For `crc01`, point DNS to:
 
 ```text
-api.crc.testing       -> 192.168.10.55
 api.crc01.testing     -> 192.168.10.55
 *.crc01.testing       -> 192.168.10.55
 *.apps-crc01.testing  -> 192.168.10.55
@@ -81,7 +73,6 @@ api.crc01.testing     -> 192.168.10.55
 For `crc02`, point DNS to:
 
 ```text
-api.crc.testing       -> 192.168.10.56
 api.crc02.testing     -> 192.168.10.56
 *.crc02.testing       -> 192.168.10.56
 *.apps-crc02.testing  -> 192.168.10.56

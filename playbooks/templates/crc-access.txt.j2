@@ -2,11 +2,7 @@ CRC cluster {{ crc_cluster_name }}
 
 DNS server for WireGuard clients: {{ crc_bind_address }}
 
-Canonical CRC names:
-  API:     https://api.crc.testing:6443
-  Console: https://console-openshift-console.apps-crc.testing
-
-Cluster-scoped names exposed by HAProxy/dnsmasq:
+Configured public names exposed by HAProxy/dnsmasq:
   API:     https://{{ crc_api_alias }}:6443
   Console: https://{{ crc_console_alias }}
   OAuth:   https://{{ crc_oauth_alias }}

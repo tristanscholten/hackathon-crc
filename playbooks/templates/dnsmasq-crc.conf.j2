@@ -7,10 +7,6 @@ bind-interfaces
 listen-address={{ addr }}
 {% endfor %}
 
-# Canonical CRC names used inside kubeconfig/routes/certs.
-address=/api.crc.testing/{{ crc_bind_address }}
-address=/.apps-crc.testing/{{ crc_bind_address }}
-
 # Configurable API/apps domains for humans / multiple hosts.
 address=/.{{ crc_api_domain }}/{{ crc_bind_address }}
 address=/.{{ crc_apps_domain }}/{{ crc_bind_address }}
