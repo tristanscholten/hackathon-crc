@@ -22,7 +22,7 @@ On each Ubuntu host in `inventory/hosts.yml`:
 - OpenShift CRC VM
 - HAProxy TCP forwarding for the API server (`192.168.10.55:6443` -> `127.0.0.1:6443` in CRC user-networking mode)
 - CRC's user-networking router exposure for HTTP/HTTPS (`192.168.10.55:80/443`)
-- a 60 GiB CRC VM disk by default; smaller 35 GiB disks can hit OpenShift node `DiskPressure` after repeated restarts/log growth
+- an 80 GiB CRC VM disk by default; smaller disks can hit OpenShift node `DiskPressure` after repeated restarts/log growth
 - dnsmasq records for CRC names
 
 Default targets:

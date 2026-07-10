@@ -29,7 +29,7 @@ crc_pull_secret_dest: "{{ crc_run_home }}/.crc-pull-secret.json"
 
 crc_cpus: 8
 crc_memory_mib: 24576
-crc_disk_size_gib: 60
+crc_disk_size_gib: 80
 crc_force_recreate: false
 
 crc_network_mode: user

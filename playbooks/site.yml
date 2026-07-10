@@ -179,6 +179,10 @@
         mode: "0644"
         create: true
 
+    - name: Enable lingering for CRC run user systemd services
+      ansible.builtin.command: "loginctl enable-linger {{ crc_run_user }}"
+      changed_when: false
+
     - name: Show CRC version
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} version"
@@ -271,13 +275,38 @@
         - { key: disk-size, value: "{{ crc_disk_size_gib }}" }
       changed_when: true
 
+    - name: Check whether CRC setup has already completed
+      ansible.builtin.stat:
+        path: /var/lib/crc-ansible/crc-setup-complete
+      register: crc_setup_marker
+
     - name: Run crc setup
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} setup"
       register: crc_setup
       async: 7200
       poll: 30
+      when: not crc_setup_marker.stat.exists
       changed_when: "'already' not in (crc_setup.stdout | lower)"
+
+    - name: Mark CRC setup complete
+      ansible.builtin.file:
+        path: /var/lib/crc-ansible/crc-setup-complete
+        state: touch
+        mode: "0644"
+      when: not crc_setup_marker.stat.exists
+
+    - name: Keep CRC user-networking daemon alive across SSH sessions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        uid="$(id -u {{ crc_run_user }})"
+        export XDG_RUNTIME_DIR="/run/user/${uid}"
+        sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user enable --now crc-http.socket crc-vsock.socket
+        sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user start crc-daemon.service
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: crc_network_mode == 'user'
 
     - name: Stop existing CRC before forced recreate
       become_user: "{{ crc_run_user }}"
@@ -309,14 +338,17 @@
 
     - name: Start CRC
       become_user: "{{ crc_run_user }}"
-      ansible.builtin.command: "{{ crc_command }} start -p {{ crc_pull_secret_dest }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! pgrep -u "$(id -u)" -f '^{{ crc_command | regex_escape }} start' >/dev/null; then
+          nohup "{{ crc_command }}" start -p "{{ crc_pull_secret_dest }}" >"{{ crc_run_home }}/.crc/ansible-crc-start.log" 2>&1 &
+        fi
+      args:
+        executable: /bin/bash
       when: >-
         ('CRC VM:' not in crc_status.stdout)
         or ('OpenShift:       Running' not in crc_status.stdout and 'OpenShift:       Degraded' not in crc_status.stdout)
-      register: crc_start
-      async: 7200
-      poll: 30
-      no_log: true
+      changed_when: true
 
     - name: Get CRC IP
       become_user: "{{ crc_run_user }}"
@@ -471,12 +503,14 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
-        "{{ oc_command }}" -n openshift-console delete route "console-{{ crc_cluster_name }}" --ignore-not-found=true
-        "{{ oc_command }}" -n openshift-authentication delete route "oauth-openshift-{{ crc_cluster_name }}" --ignore-not-found=true
+        if "{{ oc_command }}" api-resources --api-group=route.openshift.io -o name | grep -qx routes; then
+          "{{ oc_command }}" -n openshift-console delete routes.route.openshift.io "console-{{ crc_cluster_name }}" --ignore-not-found=true
+          "{{ oc_command }}" -n openshift-authentication delete routes.route.openshift.io "oauth-openshift-{{ crc_cluster_name }}" --ignore-not-found=true
+        fi
       args:
         executable: /bin/bash
       when: crc_configure_custom_domains | bool
-      changed_when: true
+      changed_when: false
 
     - name: Wait for configured API, console, and OAuth domains
       become_user: "{{ crc_run_user }}"
@@ -646,6 +680,27 @@
       delegate_to: localhost
       become: false
       changed_when: false
+
+    - name: Verify custom domains remain stable after API rollout window
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sleep 120
+        rm -f "{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable"
+        KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable" \
+          "{{ local_oc_command }}" login -u developer -p developer "https://{{ crc_api_alias }}:6443" --insecure-skip-tls-verify=true
+        test "$(KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable" "{{ local_oc_command }}" whoami)" = developer
+        KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable" \
+          "{{ local_oc_command }}" get --raw=/version >/tmp/{{ crc_cluster_name }}-stable-oc-version.json
+        curl -kfsS "https://{{ crc_api_alias }}:6443/version" >/tmp/{{ crc_cluster_name }}-stable-api-version.json
+        curl -kfsS -L "https://{{ crc_console_alias }}/" -o /tmp/{{ crc_cluster_name }}-stable-console.html
+        grep -q 'Red Hat OpenShift' /tmp/{{ crc_cluster_name }}-stable-console.html
+        test "$(curl -kfsS "https://{{ crc_oauth_alias }}/healthz")" = ok
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      no_log: true
 
     - name: Render remote access summary
       ansible.builtin.template:
