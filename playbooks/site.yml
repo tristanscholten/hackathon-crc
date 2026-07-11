@@ -195,6 +195,15 @@
       ansible.builtin.command: "loginctl enable-linger {{ crc_run_user }}"
       changed_when: false
 
+    - name: Ensure CRC config directory is owned by CRC run user
+      ansible.builtin.file:
+        path: "{{ crc_run_home }}/.crc"
+        state: directory
+        owner: "{{ crc_run_user }}"
+        group: "{{ crc_run_user }}"
+        mode: "0755"
+        recurse: true
+
     - name: Show CRC version
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} version"
@@ -613,6 +622,10 @@
         test "$(KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" "{{ oc_command }}" whoami)" = developer
       args:
         executable: /bin/bash
+      register: crc_developer_login_check
+      retries: 40
+      delay: 15
+      until: crc_developer_login_check.rc == 0
       changed_when: false
       no_log: true
 
@@ -734,6 +747,10 @@
         executable: /bin/bash
       delegate_to: localhost
       become: false
+      register: crc_local_login_check
+      retries: 40
+      delay: 15
+      until: crc_local_login_check.rc == 0
       changed_when: false
       no_log: true
 
