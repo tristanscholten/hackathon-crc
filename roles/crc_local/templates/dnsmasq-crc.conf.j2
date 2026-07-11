@@ -1,0 +1,12 @@
+# Managed by Ansible. CRC DNS for {{ crc_cluster_name }}.
+# Do not read /etc/hosts: CRC user-mode adds canonical names there as 127.0.0.1
+# for local host use, but VPN clients need the host-facing address.
+no-hosts
+bind-interfaces
+{% for addr in crc_dns_listen_addresses %}
+listen-address={{ addr }}
+{% endfor %}
+
+# Configurable API/apps domains for humans / multiple hosts.
+address=/.{{ crc_api_domain }}/{{ crc_bind_address }}
+address=/.{{ crc_apps_domain }}/{{ crc_bind_address }}

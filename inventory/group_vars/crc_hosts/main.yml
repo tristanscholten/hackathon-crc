@@ -65,3 +65,4 @@ crc_ubuntu_packages:
   - network-manager
   - haproxy
   - dnsmasq
+  - python3-kubernetes

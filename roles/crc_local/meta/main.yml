@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: crc_local
+  author: Tristan Scholten
+  description: Install and expose OpenShift Local / CRC on Ubuntu hosts.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+dependencies: []

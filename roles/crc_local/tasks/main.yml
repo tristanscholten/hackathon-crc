@@ -1,0 +1,924 @@
+---
+- name: Assert Ubuntu target
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == "Ubuntu"
+    fail_msg: "This playbook currently supports fresh Ubuntu hosts only."
+
+- name: Assert pull secret exists on controller
+  ansible.builtin.stat:
+    path: "{{ crc_pull_secret_src }}"
+  delegate_to: localhost
+  become: false
+  register: crc_pull_secret_stat
+  no_log: true
+
+- name: Fail when pull secret is missing
+  ansible.builtin.assert:
+    that:
+      - crc_pull_secret_stat.stat.exists
+    fail_msg: "Set CRC_PULL_SECRET_PATH or place the pull secret at {{ crc_pull_secret_src }}"
+  no_log: true
+
+- name: Install Ubuntu packages
+  ansible.builtin.apt:
+    name: "{{ crc_ubuntu_packages }}"
+    state: present
+    update_cache: true
+  register: crc_package_install
+
+- name: Check whether optional virtiofsd package is available
+  ansible.builtin.command: apt-cache show virtiofsd
+  register: crc_virtiofsd_package
+  failed_when: false
+  changed_when: false
+
+- name: Install optional virtiofsd package when available
+  ansible.builtin.apt:
+    name: virtiofsd
+    state: present
+  when: crc_virtiofsd_package.rc == 0
+
+- name: Check whether KVM package reboot has already been done
+  ansible.builtin.stat:
+    path: /var/lib/crc-ansible/kvm-package-rebooted
+  register: crc_kvm_reboot_marker
+
+- name: Ensure CRC Ansible state directory exists
+  ansible.builtin.file:
+    path: /var/lib/crc-ansible
+    state: directory
+    mode: "0755"
+
+- name: Reboot after KVM/libvirt package install
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+    connect_timeout: 10
+    post_reboot_delay: 15
+  when:
+    - crc_reboot_after_package_install | bool
+    - not crc_kvm_reboot_marker.stat.exists
+
+- name: Mark KVM package reboot complete
+  ansible.builtin.file:
+    path: /var/lib/crc-ansible/kvm-package-rebooted
+    state: touch
+    mode: "0644"
+  when: crc_reboot_after_package_install | bool
+
+- name: Try to load KVM kernel modules
+  ansible.builtin.shell: |
+    set -euo pipefail
+    modprobe kvm || true
+    modprobe kvm_intel || modprobe kvm_amd || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Check KVM device after package install/module load
+  ansible.builtin.stat:
+    path: /dev/kvm
+  register: crc_kvm_device
+
+- name: Report KVM availability before crc setup
+  ansible.builtin.debug:
+    msg: >-
+      /dev/kvm {{ 'exists' if crc_kvm_device.stat.exists else 'is missing' }}.
+      Continuing to crc setup so CRC performs its own official prerequisite checks.
+
+- name: Enable libvirt and NetworkManager
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - libvirtd
+    - NetworkManager
+
+- name: Add CRC run user to virtualization groups
+  ansible.builtin.user:
+    name: "{{ crc_run_user }}"
+    groups: kvm,libvirt
+    append: true
+
+- name: Allow CRC run user passwordless sudo for CRC setup/start helpers
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/99-crc-{{ crc_run_user }}"
+    mode: "0440"
+    content: "{{ crc_run_user }} ALL=(root) NOPASSWD:ALL\n"
+    validate: "visudo -cf %s"
+  when: crc_allow_passwordless_sudo_for_setup | bool
+
+- name: Create CRC download directory
+  ansible.builtin.file:
+    path: "{{ crc_download_dir }}"
+    state: directory
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0755"
+
+- name: Create CRC user bin directory
+  ansible.builtin.file:
+    path: "{{ crc_user_bin_dir }}"
+    state: directory
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0755"
+
+- name: Download latest CRC archive
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.get_url:
+    url: "{{ crc_archive_url }}"
+    dest: "{{ crc_download_dir }}/{{ crc_tarball_name }}"
+    mode: "0644"
+  register: crc_archive_download
+
+- name: Check installed CRC executable
+  ansible.builtin.stat:
+    path: "{{ crc_command }}"
+  register: crc_binary
+
+- name: Extract latest CRC archive and install executable into ~/bin
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -rf "{{ crc_download_dir }}"/crc-linux-*-amd64
+    tar xvf "{{ crc_download_dir }}/{{ crc_tarball_name }}" -C "{{ crc_download_dir }}"
+    cp "{{ crc_download_dir }}"/crc-linux-*-amd64/crc "{{ crc_command }}"
+    chmod 0755 "{{ crc_command }}"
+  args:
+    executable: /bin/bash
+  when: crc_archive_download.changed or not crc_binary.stat.exists
+  changed_when: true
+
+- name: Download latest OpenShift CLI archive
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.get_url:
+    url: "{{ oc_archive_url }}"
+    dest: "{{ crc_download_dir }}/{{ oc_tarball_name }}"
+    mode: "0644"
+  register: oc_archive_download
+
+- name: Check installed OpenShift CLI executable
+  ansible.builtin.stat:
+    path: "{{ oc_command }}"
+  register: oc_binary
+
+- name: Extract latest OpenShift CLI into ~/bin
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    tar xvf "{{ crc_download_dir }}/{{ oc_tarball_name }}" -C "{{ crc_user_bin_dir }}" oc kubectl
+    chmod 0755 "{{ crc_user_bin_dir }}/oc" "{{ crc_user_bin_dir }}/kubectl"
+  args:
+    executable: /bin/bash
+  when: oc_archive_download.changed or not oc_binary.stat.exists
+  changed_when: true
+
+- name: Add ~/bin to PATH in shell profile
+  ansible.builtin.lineinfile:
+    path: "{{ crc_run_home }}/.bashrc"
+    line: 'export PATH=$PATH:$HOME/bin'
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0644"
+    create: true
+
+- name: Enable lingering for CRC run user systemd services
+  ansible.builtin.command: "loginctl enable-linger {{ crc_run_user }}"
+  changed_when: false
+
+- name: Ensure CRC config directory is owned by CRC run user
+  ansible.builtin.file:
+    path: "{{ crc_run_home }}/.crc"
+    state: directory
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0755"
+    recurse: true
+
+- name: Show CRC version
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} version"
+  register: crc_version_cmd
+  changed_when: false
+
+- name: Show OpenShift CLI version
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ oc_command }} version --client=true"
+  register: oc_version_cmd
+  changed_when: false
+
+- name: Ensure CRC cache backing directory is outside the small home LV
+  ansible.builtin.file:
+    path: "{{ crc_cache_dir }}"
+    state: directory
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0775"
+
+- name: Check CRC cache path
+  ansible.builtin.stat:
+    path: "{{ crc_run_home }}/.crc/cache"
+  register: crc_cache_path
+
+- name: Move existing CRC cache into backing directory
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if mountpoint -q "{{ crc_run_home }}/.crc/cache"; then
+      exit 0
+    fi
+    if [ -d "{{ crc_run_home }}/.crc/cache" ] && [ ! -L "{{ crc_run_home }}/.crc/cache" ]; then
+      sudo -u "{{ crc_run_user }}" "{{ crc_command }}" stop || true
+      rsync -aH "{{ crc_run_home }}/.crc/cache/" "{{ crc_cache_dir }}/"
+      rm -rf "{{ crc_run_home }}/.crc/cache"
+    fi
+    if [ -L "{{ crc_run_home }}/.crc/cache" ]; then
+      rm -f "{{ crc_run_home }}/.crc/cache"
+    fi
+    mkdir -p "{{ crc_run_home }}/.crc/cache"
+    chown "{{ crc_run_user }}:{{ crc_run_user }}" "{{ crc_run_home }}/.crc" "{{ crc_run_home }}/.crc/cache"
+  args:
+    executable: /bin/bash
+  changed_when: crc_cache_path.stat.exists and not crc_cache_path.stat.isdir
+
+- name: Bind mount CRC cache backing directory
+  ansible.posix.mount:
+    path: "{{ crc_run_home }}/.crc/cache"
+    src: "{{ crc_cache_dir }}"
+    fstype: none
+    opts: bind
+    state: mounted
+
+- name: Ensure CRC cache is readable by libvirt/qemu
+  ansible.builtin.file:
+    path: "{{ crc_cache_dir }}"
+    state: directory
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0755"
+    recurse: true
+
+- name: Allow CRC to bind privileged local ports in user network mode
+  community.general.capabilities:
+    path: "{{ crc_command }}"
+    capability: cap_net_bind_service+ep
+    state: present
+  when: crc_network_mode == 'user'
+
+- name: Copy pull secret for CRC user
+  ansible.builtin.copy:
+    src: "{{ crc_pull_secret_src }}"
+    dest: "{{ crc_pull_secret_dest }}"
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0600"
+  no_log: true
+
+- name: Configure CRC
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} config set {{ item.key }} {{ item.value }}"
+  loop:
+    - { key: consent-telemetry, value: "no" }
+    - { key: disable-update-check, value: "true" }
+    - { key: preset, value: "openshift" }
+    - { key: network-mode, value: "{{ crc_network_mode }}" }
+    - { key: pull-secret-file, value: "{{ crc_pull_secret_dest }}" }
+    - { key: cpus, value: "{{ crc_cpus }}" }
+    - { key: memory, value: "{{ crc_memory_mib }}" }
+    - { key: disk-size, value: "{{ crc_disk_size_gib }}" }
+  changed_when: true
+
+- name: Check whether CRC setup has already completed
+  ansible.builtin.stat:
+    path: /var/lib/crc-ansible/crc-setup-complete
+  register: crc_setup_marker
+
+- name: Check current CRC setup health
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} setup --check-only"
+  register: crc_setup_check
+  failed_when: false
+  changed_when: false
+
+- name: Run crc setup
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} setup"
+  register: crc_setup
+  async: 7200
+  poll: 30
+  when: (not crc_setup_marker.stat.exists) or (crc_setup_check.rc != 0)
+  changed_when: "'already' not in (crc_setup.stdout | lower)"
+
+- name: Mark CRC setup complete
+  ansible.builtin.file:
+    path: /var/lib/crc-ansible/crc-setup-complete
+    state: touch
+    mode: "0644"
+  when: (not crc_setup_marker.stat.exists) or (crc_setup_check.rc != 0)
+
+- name: Keep CRC user-networking daemon alive across SSH sessions
+  ansible.builtin.shell: |
+    set -euo pipefail
+    uid="$(id -u {{ crc_run_user }})"
+    export XDG_RUNTIME_DIR="/run/user/${uid}"
+    sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user enable --now crc-http.socket crc-vsock.socket
+    sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user start crc-daemon.service
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: crc_network_mode == 'user'
+
+- name: Stop existing CRC before forced recreate
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} stop"
+  when: crc_force_recreate | bool
+  failed_when: false
+  changed_when: true
+
+- name: Delete existing CRC before forced recreate
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} delete -f"
+  when: crc_force_recreate | bool
+  failed_when: false
+  changed_when: true
+
+- name: Check CRC status
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} status --log-level error"
+  register: crc_status
+  failed_when: false
+  changed_when: false
+
+- name: Restart unreachable CRC VM
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} stop"
+  when: "'OpenShift:       Unreachable' in crc_status.stdout"
+  failed_when: false
+  changed_when: true
+
+- name: Start CRC
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if ! pgrep -u "$(id -u)" -f '^{{ crc_command | regex_escape }} start' >/dev/null; then
+      nohup "{{ crc_command }}" start -p "{{ crc_pull_secret_dest }}" >"{{ crc_run_home }}/.crc/ansible-crc-start.log" 2>&1 &
+    fi
+  args:
+    executable: /bin/bash
+  when: >-
+    ('CRC VM:' not in crc_status.stdout)
+    or ('OpenShift:       Running' not in crc_status.stdout and 'OpenShift:       Degraded' not in crc_status.stdout)
+  changed_when: true
+
+- name: Wait for CRC machine IP
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command: "{{ crc_command }} ip"
+  register: crc_ip_cmd
+  retries: 80
+  delay: 15
+  until: crc_ip_cmd.rc == 0
+  changed_when: false
+
+- name: Store CRC IP fact
+  ansible.builtin.set_fact:
+    crc_vm_ip: "{{ crc_ip_cmd.stdout | trim }}"
+
+- name: Store proxy backend IP fact
+  ansible.builtin.set_fact:
+    crc_proxy_backend_ip: "{{ '127.0.0.1' if crc_network_mode == 'user' else crc_vm_ip }}"
+
+- name: Install dnsmasq CRC config before cluster domain changes
+  ansible.builtin.template:
+    src: dnsmasq-crc.conf.j2
+    dest: /etc/dnsmasq.d/crc.conf
+    mode: "0644"
+  when: crc_enable_dnsmasq | bool
+  notify: Restart dnsmasq
+
+- name: Enable dnsmasq before cluster domain changes
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: started
+    enabled: true
+  when: crc_enable_dnsmasq | bool
+
+- name: Add exact custom CRC names to host resolver
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED CRC {{ crc_cluster_name }} DOMAINS"
+    block: |
+      127.0.0.1 {{ crc_api_alias }} {{ crc_console_alias }} {{ crc_oauth_alias }}
+  when: crc_configure_custom_domains | bool
+
+- name: Apply DNS handler before cluster domain changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for OpenShift API to answer
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    {{ oc_command }} get clusterversion version -o name
+  args:
+    executable: /bin/bash
+  register: crc_api_ready
+  retries: 40
+  delay: 15
+  until: crc_api_ready.rc == 0
+  changed_when: false
+
+- name: Configure cluster DNS forwarding for custom CRC domains
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: present
+    merge_type:
+      - merge
+    definition:
+      apiVersion: operator.openshift.io/v1
+      kind: DNS
+      metadata:
+        name: default
+      spec:
+        servers:
+          - name: "{{ crc_cluster_name }}-custom-domains"
+            zones:
+              - "{{ crc_api_domain }}"
+              - "{{ crc_apps_domain }}"
+            forwardPlugin:
+              upstreams:
+                - "{{ crc_bind_address }}"
+  register: crc_dns_forward_config
+  retries: 20
+  delay: 15
+  until: crc_dns_forward_config is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Wait for cluster DNS forwarding config
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    "{{ oc_command }}" get dns.operator/default -o jsonpath='{.spec.servers[*].zones[*]}' | grep -qw '{{ crc_api_domain }}'
+    "{{ oc_command }}" get dns.operator/default -o jsonpath='{.spec.servers[*].zones[*]}' | grep -qw '{{ crc_apps_domain }}'
+  args:
+    executable: /bin/bash
+  register: crc_dns_forward_ready
+  retries: 40
+  delay: 15
+  until: crc_dns_forward_ready.rc == 0
+  changed_when: false
+  when: crc_configure_custom_domains | bool
+
+- name: Generate custom domain certificate
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -newkey
+      - rsa:2048
+      - -new
+      - -nodes
+      - -x509
+      - -days
+      - "3650"
+      - -keyout
+      - "{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.key"
+      - -out
+      - "{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt"
+      - -subj
+      - "/CN={{ crc_api_domain }}"
+      - -addext
+      - "subjectAltName=DNS:{{ crc_api_alias }},DNS:{{ crc_api_domain }},DNS:*.{{ crc_api_domain }},DNS:{{ crc_apps_domain }},DNS:*.{{ crc_apps_domain }}"
+  args:
+    creates: "{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt"
+  when: crc_configure_custom_domains | bool
+
+- name: Apply custom domain TLS secret
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    "{{ oc_command }}" create secret tls "{{ crc_domain_secret_name }}" \
+      --cert="{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.crt" \
+      --key="{{ crc_run_home }}/.crc/{{ crc_cluster_name }}-domain.key" \
+      -n openshift-config \
+      --dry-run=client -o yaml | "{{ oc_command }}" apply -f -
+  args:
+    executable: /bin/bash
+  when: crc_configure_custom_domains | bool
+  changed_when: false
+
+- name: Configure OpenShift custom ingress apps domain and component routes
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: present
+    merge_type:
+      - merge
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: Ingress
+      metadata:
+        name: cluster
+      spec:
+        appsDomain: "{{ crc_apps_domain }}"
+        componentRoutes:
+          - hostname: "{{ crc_console_alias }}"
+            name: console
+            namespace: openshift-console
+            servingCertKeyPairSecret:
+              name: "{{ crc_domain_secret_name }}"
+          - hostname: "{{ crc_oauth_alias }}"
+            name: oauth-openshift
+            namespace: openshift-authentication
+            servingCertKeyPairSecret:
+              name: "{{ crc_domain_secret_name }}"
+  register: crc_ingress_domain_config
+  retries: 20
+  delay: 15
+  until: crc_ingress_domain_config is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Configure OpenShift custom API domain certificate
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: present
+    merge_type:
+      - merge
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: APIServer
+      metadata:
+        name: cluster
+      spec:
+        servingCerts:
+          namedCertificates:
+            - names:
+                - "{{ crc_api_alias }}"
+              servingCertificate:
+                name: "{{ crc_domain_secret_name }}"
+  register: crc_api_domain_config
+  retries: 20
+  delay: 15
+  until: crc_api_domain_config is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Remove legacy manually-created route aliases
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    if "{{ oc_command }}" api-resources --api-group=route.openshift.io -o name | grep -Eq '^routes(\.route\.openshift\.io)?$'; then
+      "{{ oc_command }}" -n openshift-console delete routes.route.openshift.io "console-{{ crc_cluster_name }}" --ignore-not-found=true
+      "{{ oc_command }}" -n openshift-authentication delete routes.route.openshift.io "oauth-openshift-{{ crc_cluster_name }}" --ignore-not-found=true
+    fi
+  args:
+    executable: /bin/bash
+  when: crc_configure_custom_domains | bool
+  changed_when: false
+
+- name: Wait for configured API, console, and OAuth domains
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.appsDomain}')" = "{{ crc_apps_domain }}"
+    test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.componentRoutes[?(@.name=="console")].hostname}')" = "{{ crc_console_alias }}"
+    test "$({{ oc_command }} get ingress.config.openshift.io cluster -o jsonpath='{.spec.componentRoutes[?(@.name=="oauth-openshift")].hostname}')" = "{{ crc_oauth_alias }}"
+    {{ oc_command }} get apiserver cluster -o jsonpath='{.spec.servingCerts.namedCertificates[*].names[*]}' | grep -qw '{{ crc_api_alias }}'
+  args:
+    executable: /bin/bash
+  register: crc_custom_domain_config
+  retries: 40
+  delay: 15
+  until: crc_custom_domain_config.rc == 0
+  changed_when: false
+  when: crc_configure_custom_domains | bool
+
+- name: Configure image registry custom route on the custom apps domain
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: present
+    merge_type:
+      - merge
+    definition:
+      apiVersion: imageregistry.operator.openshift.io/v1
+      kind: Config
+      metadata:
+        name: cluster
+      spec:
+        defaultRoute: false
+        routes:
+          - name: "{{ crc_registry_route_name }}"
+            hostname: "{{ crc_registry_alias }}"
+  register: crc_registry_route_config
+  retries: 20
+  delay: 15
+  until: crc_registry_route_config is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Remove legacy/default route aliases for custom-domain replacements
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: absent
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ item.namespace }}"
+    name: "{{ item.name }}"
+  loop:
+    - namespace: default
+      name: downloads-custom
+    - namespace: default
+      name: canary-custom
+    - namespace: openshift-console
+      name: downloads-custom
+    - namespace: openshift-ingress-canary
+      name: canary-custom
+    - namespace: openshift-image-registry
+      name: default-route
+  register: crc_removed_legacy_routes
+  retries: 20
+  delay: 15
+  until: crc_removed_legacy_routes is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Ensure downloads route on the custom apps domain
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: "{{ crc_downloads_route_name }}"
+        namespace: openshift-console
+      spec:
+        host: "{{ crc_downloads_alias }}"
+        to:
+          kind: Service
+          name: downloads
+          weight: 100
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        wildcardPolicy: None
+  register: crc_downloads_route_config
+  retries: 20
+  delay: 15
+  until: crc_downloads_route_config is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Ensure ingress canary route on the custom apps domain
+  become_user: "{{ crc_run_user }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: "{{ crc_canary_route_name }}"
+        namespace: openshift-ingress-canary
+      spec:
+        host: "{{ crc_canary_alias }}"
+        to:
+          kind: Service
+          name: ingress-canary
+          weight: 100
+        port:
+          targetPort: 8443-tcp
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        wildcardPolicy: None
+  register: crc_canary_route_config
+  retries: 20
+  delay: 15
+  until: crc_canary_route_config is succeeded
+  when: crc_configure_custom_domains | bool
+
+- name: Wait for custom apps-domain routes for built-in CRC services
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    test "$({{ oc_command }} -n openshift-console get routes.route.openshift.io "{{ crc_downloads_route_name }}" -o jsonpath='{.spec.host}')" = "{{ crc_downloads_alias }}"
+    test "$({{ oc_command }} -n openshift-console get routes.route.openshift.io "{{ crc_downloads_route_name }}" -o jsonpath='{.status.ingress[0].host}')" = "{{ crc_downloads_alias }}"
+    test "$({{ oc_command }} -n openshift-image-registry get routes.route.openshift.io "{{ crc_registry_route_name }}" -o jsonpath='{.spec.host}')" = "{{ crc_registry_alias }}"
+    test "$({{ oc_command }} -n openshift-image-registry get routes.route.openshift.io "{{ crc_registry_route_name }}" -o jsonpath='{.status.ingress[0].host}')" = "{{ crc_registry_alias }}"
+    test "$({{ oc_command }} -n openshift-ingress-canary get routes.route.openshift.io "{{ crc_canary_route_name }}" -o jsonpath='{.spec.host}')" = "{{ crc_canary_alias }}"
+    test "$({{ oc_command }} -n openshift-ingress-canary get routes.route.openshift.io "{{ crc_canary_route_name }}" -o jsonpath='{.status.ingress[0].host}')" = "{{ crc_canary_alias }}"
+  args:
+    executable: /bin/bash
+  register: crc_builtin_route_custom_domain
+  retries: 40
+  delay: 15
+  until: crc_builtin_route_custom_domain.rc == 0
+  changed_when: false
+  when: crc_configure_custom_domains | bool
+
+- name: Verify OpenShift CLI can login as developer inside CRC host
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -f "{{ crc_run_home }}/.crc-developer-kubeconfig"
+    KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" \
+      "{{ oc_command }}" login -u developer -p developer https://{{ crc_api_alias }}:6443 --insecure-skip-tls-verify=true
+    test "$(KUBECONFIG="{{ crc_run_home }}/.crc-developer-kubeconfig" "{{ oc_command }}" whoami)" = developer
+  args:
+    executable: /bin/bash
+  register: crc_developer_login_check
+  retries: 40
+  delay: 15
+  until: crc_developer_login_check.rc == 0
+  changed_when: false
+  no_log: true
+
+- name: Verify console UI route is accessible
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -kfsS --resolve "{{ crc_console_alias }}:443:127.0.0.1" \
+      -o /tmp/crc-console-ui-test.html \
+      "https://{{ crc_console_alias }}/"
+    grep -q 'Red Hat OpenShift' /tmp/crc-console-ui-test.html
+  args:
+    executable: /bin/bash
+  register: crc_console_ui_check
+  retries: 40
+  delay: 15
+  until: crc_console_ui_check.rc == 0
+  changed_when: false
+
+- name: Verify OAuth route health endpoint is accessible
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test "$(curl -kfsS --resolve "{{ crc_oauth_alias }}:443:127.0.0.1" "https://{{ crc_oauth_alias }}/healthz")" = ok
+  args:
+    executable: /bin/bash
+  register: crc_oauth_health_check
+  retries: 40
+  delay: 15
+  until: crc_oauth_health_check.rc == 0
+  changed_when: false
+
+- name: Show cluster operator summary after endpoint verification
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    {{ oc_command }} get co authentication console ingress kube-apiserver openshift-apiserver machine-config image-registry
+  args:
+    executable: /bin/bash
+  register: crc_cluster_operator_summary
+  changed_when: false
+  failed_when: false
+
+- name: Install HAProxy config
+  ansible.builtin.template:
+    src: haproxy-crc.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    mode: "0644"
+  when: crc_enable_haproxy | bool
+  notify: Restart haproxy
+
+- name: Install dnsmasq CRC config
+  ansible.builtin.template:
+    src: dnsmasq-crc.conf.j2
+    dest: /etc/dnsmasq.d/crc.conf
+    mode: "0644"
+  when: crc_enable_dnsmasq | bool
+  notify: Restart dnsmasq
+
+- name: Enable HAProxy
+  ansible.builtin.systemd_service:
+    name: haproxy
+    state: started
+    enabled: true
+  when: crc_enable_haproxy | bool
+
+- name: Enable dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: started
+    enabled: true
+  when: crc_enable_dnsmasq | bool
+
+- name: Apply pending proxy and DNS handlers before controller-side verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Create local OpenShift CLI directory on Ansible controller
+  ansible.builtin.file:
+    path: "{{ local_oc_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Download OpenShift CLI on Ansible controller
+  ansible.builtin.get_url:
+    url: "{{ oc_archive_url }}"
+    dest: "{{ local_oc_dir }}/{{ oc_tarball_name }}"
+    mode: "0644"
+  register: local_oc_archive_download
+  delegate_to: localhost
+  become: false
+
+- name: Check local OpenShift CLI executable
+  ansible.builtin.stat:
+    path: "{{ local_oc_command }}"
+  register: local_oc_binary
+  delegate_to: localhost
+  become: false
+
+- name: Extract OpenShift CLI on Ansible controller
+  ansible.builtin.command: >-
+    tar xvf {{ local_oc_dir }}/{{ oc_tarball_name }} -C {{ local_oc_dir }} oc kubectl
+  delegate_to: localhost
+  become: false
+  changed_when: local_oc_archive_download.changed or not local_oc_binary.stat.exists
+
+- name: Verify local OpenShift CLI can login through custom API domain
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -f "{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}"
+    KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}" \
+      "{{ local_oc_command }}" login -u developer -p developer "https://{{ crc_api_alias }}:6443" --insecure-skip-tls-verify=true
+    test "$(KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}" "{{ local_oc_command }}" whoami)" = developer
+    KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}" \
+      "{{ local_oc_command }}" get --raw=/version >/tmp/{{ crc_cluster_name }}-oc-version.json
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  register: crc_local_login_check
+  retries: 40
+  delay: 15
+  until: crc_local_login_check.rc == 0
+  changed_when: false
+  no_log: true
+
+- name: Verify custom domains from Ansible controller
+  ansible.builtin.shell: |
+    set -euo pipefail
+    getent hosts "{{ crc_api_alias }}"
+    getent hosts "test.{{ crc_api_domain }}"
+    getent hosts "{{ crc_console_alias }}"
+    getent hosts "test.{{ crc_apps_domain }}"
+    curl -kfsS "https://{{ crc_api_alias }}:6443/version" >/tmp/{{ crc_cluster_name }}-api-version.json
+    curl -kfsS -L "https://{{ crc_console_alias }}/" -o /tmp/{{ crc_cluster_name }}-console.html
+    grep -q 'Red Hat OpenShift' /tmp/{{ crc_cluster_name }}-console.html
+    test "$(curl -kfsS "https://{{ crc_oauth_alias }}/healthz")" = ok
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Verify custom domains remain stable after API rollout window
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sleep 120
+    rm -f "{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable"
+    KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable" \
+      "{{ local_oc_command }}" login -u developer -p developer "https://{{ crc_api_alias }}:6443" --insecure-skip-tls-verify=true
+    test "$(KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable" "{{ local_oc_command }}" whoami)" = developer
+    KUBECONFIG="{{ playbook_dir }}/../.local/kubeconfig-{{ crc_cluster_name }}-stable" \
+      "{{ local_oc_command }}" get --raw=/version >/tmp/{{ crc_cluster_name }}-stable-oc-version.json
+    curl -kfsS "https://{{ crc_api_alias }}:6443/version" >/tmp/{{ crc_cluster_name }}-stable-api-version.json
+    curl -kfsS -L "https://{{ crc_console_alias }}/" -o /tmp/{{ crc_cluster_name }}-stable-console.html
+    grep -q 'Red Hat OpenShift' /tmp/{{ crc_cluster_name }}-stable-console.html
+    test "$(curl -kfsS "https://{{ crc_oauth_alias }}/healthz")" = ok
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  no_log: true
+
+- name: Render remote access summary
+  ansible.builtin.template:
+    src: crc-access.txt.j2
+    dest: "{{ crc_run_home }}/crc-access-{{ crc_cluster_name }}.txt"
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0600"
+
+- name: Show non-secret access summary
+  ansible.builtin.debug:
+    msg:
+      - "CRC VM IP: {{ crc_vm_ip }}"
+      - "DNS server: {{ crc_bind_address }}"
+      - "API: https://{{ crc_api_alias }}:6443"
+      - "Console: https://{{ crc_console_alias }}"
+      - "OAuth: https://{{ crc_oauth_alias }}"

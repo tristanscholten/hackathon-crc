@@ -1,0 +1,18 @@
+CRC cluster {{ crc_cluster_name }}
+
+DNS server for WireGuard clients: {{ crc_bind_address }}
+
+Configured public names exposed by HAProxy/dnsmasq:
+  API:     https://{{ crc_api_alias }}:6443
+  Console: https://{{ crc_console_alias }}
+  OAuth:   https://{{ crc_oauth_alias }}
+
+Custom domains managed by the playbook:
+  API domain:  {{ crc_api_domain }}
+  Apps domain: {{ crc_apps_domain }}
+
+The playbook configures ingress appsDomain/componentRoutes and API named
+certificates when crc_configure_custom_domains is enabled.
+
+Get credentials on the host:
+  crc console --credentials
