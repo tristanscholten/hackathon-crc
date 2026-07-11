@@ -503,7 +503,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
-        if "{{ oc_command }}" api-resources --api-group=route.openshift.io -o name | grep -qx routes; then
+        if "{{ oc_command }}" api-resources --api-group=route.openshift.io -o name | grep -Eq '^routes(\.route\.openshift\.io)?$'; then
           "{{ oc_command }}" -n openshift-console delete routes.route.openshift.io "console-{{ crc_cluster_name }}" --ignore-not-found=true
           "{{ oc_command }}" -n openshift-authentication delete routes.route.openshift.io "oauth-openshift-{{ crc_cluster_name }}" --ignore-not-found=true
         fi
@@ -527,6 +527,59 @@
       retries: 40
       delay: 15
       until: crc_custom_domain_config.rc == 0
+      changed_when: false
+      when: crc_configure_custom_domains | bool
+
+    - name: Expose built-in CRC services on the custom apps domain
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+        if "{{ oc_command }}" api-resources --api-group=route.openshift.io -o name | grep -Eq '^routes(\.route\.openshift\.io)?$'; then
+          "{{ oc_command }}" -n default delete routes.route.openshift.io downloads-custom canary-custom --ignore-not-found=true
+          "{{ oc_command }}" -n openshift-console delete routes.route.openshift.io downloads-custom --ignore-not-found=true
+          "{{ oc_command }}" -n openshift-ingress-canary delete routes.route.openshift.io canary-custom --ignore-not-found=true
+          "{{ oc_command }}" patch configs.imageregistry.operator.openshift.io/cluster --type=merge \
+            -p '{"spec":{"defaultRoute":false,"routes":[{"name":"{{ crc_registry_route_name }}","hostname":"{{ crc_registry_alias }}"}]}}'
+          "{{ oc_command }}" -n openshift-image-registry delete routes.route.openshift.io default-route --ignore-not-found=true
+          "{{ oc_command }}" -n openshift-console create route edge "{{ crc_downloads_route_name }}" \
+            --service=downloads \
+            --hostname="{{ crc_downloads_alias }}" \
+            --insecure-policy=Redirect \
+            --dry-run=client -o yaml | "{{ oc_command }}" -n openshift-console apply -f -
+          "{{ oc_command }}" -n openshift-ingress-canary create route passthrough "{{ crc_canary_route_name }}" \
+            --service=ingress-canary \
+            --port=8443-tcp \
+            --hostname="{{ crc_canary_alias }}" \
+            --insecure-policy=Redirect \
+            --dry-run=client -o yaml | "{{ oc_command }}" -n openshift-ingress-canary apply -f -
+        fi
+      args:
+        executable: /bin/bash
+      register: crc_builtin_route_rehost
+      retries: 20
+      delay: 15
+      until: crc_builtin_route_rehost.rc == 0
+      changed_when: false
+      when: crc_configure_custom_domains | bool
+
+    - name: Wait for custom apps-domain routes for built-in CRC services
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+        test "$({{ oc_command }} -n openshift-console get routes.route.openshift.io "{{ crc_downloads_route_name }}" -o jsonpath='{.spec.host}')" = "{{ crc_downloads_alias }}"
+        test "$({{ oc_command }} -n openshift-console get routes.route.openshift.io "{{ crc_downloads_route_name }}" -o jsonpath='{.status.ingress[0].host}')" = "{{ crc_downloads_alias }}"
+        test "$({{ oc_command }} -n openshift-image-registry get routes.route.openshift.io "{{ crc_registry_route_name }}" -o jsonpath='{.spec.host}')" = "{{ crc_registry_alias }}"
+        test "$({{ oc_command }} -n openshift-image-registry get routes.route.openshift.io "{{ crc_registry_route_name }}" -o jsonpath='{.status.ingress[0].host}')" = "{{ crc_registry_alias }}"
+        test "$({{ oc_command }} -n openshift-ingress-canary get routes.route.openshift.io "{{ crc_canary_route_name }}" -o jsonpath='{.spec.host}')" = "{{ crc_canary_alias }}"
+        test "$({{ oc_command }} -n openshift-ingress-canary get routes.route.openshift.io "{{ crc_canary_route_name }}" -o jsonpath='{.status.ingress[0].host}')" = "{{ crc_canary_alias }}"
+      args:
+        executable: /bin/bash
+      register: crc_builtin_route_custom_domain
+      retries: 40
+      delay: 15
+      until: crc_builtin_route_custom_domain.rc == 0
       changed_when: false
       when: crc_configure_custom_domains | bool
 

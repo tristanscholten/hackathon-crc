@@ -12,6 +12,12 @@ crc_api_alias: "api.{{ crc_api_domain }}"
 crc_apps_alias: "{{ crc_apps_domain }}"
 crc_console_alias: "console-openshift-console.{{ crc_apps_domain }}"
 crc_oauth_alias: "oauth-openshift.{{ crc_apps_domain }}"
+crc_downloads_alias: "downloads-openshift-console.{{ crc_apps_domain }}"
+crc_downloads_route_name: "downloads-{{ crc_cluster_name }}"
+crc_registry_alias: "default-route-openshift-image-registry.{{ crc_apps_domain }}"
+crc_registry_route_name: "registry-{{ crc_cluster_name }}"
+crc_canary_alias: "canary-openshift-ingress-canary.{{ crc_apps_domain }}"
+crc_canary_route_name: "canary-{{ crc_cluster_name }}"
 crc_domain_secret_name: "{{ crc_cluster_name }}-domain-tls"
 crc_configure_custom_domains: true
 
