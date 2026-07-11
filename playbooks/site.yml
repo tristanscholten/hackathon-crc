@@ -34,6 +34,18 @@
         update_cache: true
       register: crc_package_install
 
+    - name: Check whether optional virtiofsd package is available
+      ansible.builtin.command: apt-cache show virtiofsd
+      register: crc_virtiofsd_package
+      failed_when: false
+      changed_when: false
+
+    - name: Install optional virtiofsd package when available
+      ansible.builtin.apt:
+        name: virtiofsd
+        state: present
+      when: crc_virtiofsd_package.rc == 0
+
     - name: Check whether KVM package reboot has already been done
       ansible.builtin.stat:
         path: /var/lib/crc-ansible/kvm-package-rebooted
@@ -280,13 +292,20 @@
         path: /var/lib/crc-ansible/crc-setup-complete
       register: crc_setup_marker
 
+    - name: Check current CRC setup health
+      become_user: "{{ crc_run_user }}"
+      ansible.builtin.command: "{{ crc_command }} setup --check-only"
+      register: crc_setup_check
+      failed_when: false
+      changed_when: false
+
     - name: Run crc setup
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} setup"
       register: crc_setup
       async: 7200
       poll: 30
-      when: not crc_setup_marker.stat.exists
+      when: (not crc_setup_marker.stat.exists) or (crc_setup_check.rc != 0)
       changed_when: "'already' not in (crc_setup.stdout | lower)"
 
     - name: Mark CRC setup complete
@@ -294,7 +313,7 @@
         path: /var/lib/crc-ansible/crc-setup-complete
         state: touch
         mode: "0644"
-      when: not crc_setup_marker.stat.exists
+      when: (not crc_setup_marker.stat.exists) or (crc_setup_check.rc != 0)
 
     - name: Keep CRC user-networking daemon alive across SSH sessions
       ansible.builtin.shell: |
@@ -350,10 +369,13 @@
         or ('OpenShift:       Running' not in crc_status.stdout and 'OpenShift:       Degraded' not in crc_status.stdout)
       changed_when: true
 
-    - name: Get CRC IP
+    - name: Wait for CRC machine IP
       become_user: "{{ crc_run_user }}"
       ansible.builtin.command: "{{ crc_command }} ip"
       register: crc_ip_cmd
+      retries: 80
+      delay: 15
+      until: crc_ip_cmd.rc == 0
       changed_when: false
 
     - name: Store CRC IP fact
@@ -535,25 +557,23 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
-        if "{{ oc_command }}" api-resources --api-group=route.openshift.io -o name | grep -Eq '^routes(\.route\.openshift\.io)?$'; then
-          "{{ oc_command }}" -n default delete routes.route.openshift.io downloads-custom canary-custom --ignore-not-found=true
-          "{{ oc_command }}" -n openshift-console delete routes.route.openshift.io downloads-custom --ignore-not-found=true
-          "{{ oc_command }}" -n openshift-ingress-canary delete routes.route.openshift.io canary-custom --ignore-not-found=true
-          "{{ oc_command }}" patch configs.imageregistry.operator.openshift.io/cluster --type=merge \
-            -p '{"spec":{"defaultRoute":false,"routes":[{"name":"{{ crc_registry_route_name }}","hostname":"{{ crc_registry_alias }}"}]}}'
-          "{{ oc_command }}" -n openshift-image-registry delete routes.route.openshift.io default-route --ignore-not-found=true
-          "{{ oc_command }}" -n openshift-console create route edge "{{ crc_downloads_route_name }}" \
-            --service=downloads \
-            --hostname="{{ crc_downloads_alias }}" \
-            --insecure-policy=Redirect \
-            --dry-run=client -o yaml | "{{ oc_command }}" -n openshift-console apply -f -
-          "{{ oc_command }}" -n openshift-ingress-canary create route passthrough "{{ crc_canary_route_name }}" \
-            --service=ingress-canary \
-            --port=8443-tcp \
-            --hostname="{{ crc_canary_alias }}" \
-            --insecure-policy=Redirect \
-            --dry-run=client -o yaml | "{{ oc_command }}" -n openshift-ingress-canary apply -f -
-        fi
+        "{{ oc_command }}" -n default delete routes.route.openshift.io downloads-custom canary-custom --ignore-not-found=true
+        "{{ oc_command }}" -n openshift-console delete routes.route.openshift.io downloads-custom --ignore-not-found=true
+        "{{ oc_command }}" -n openshift-ingress-canary delete routes.route.openshift.io canary-custom --ignore-not-found=true
+        "{{ oc_command }}" patch configs.imageregistry.operator.openshift.io/cluster --type=merge \
+          -p '{"spec":{"defaultRoute":false,"routes":[{"name":"{{ crc_registry_route_name }}","hostname":"{{ crc_registry_alias }}"}]}}'
+        "{{ oc_command }}" -n openshift-image-registry delete routes.route.openshift.io default-route --ignore-not-found=true
+        "{{ oc_command }}" -n openshift-console create route edge "{{ crc_downloads_route_name }}" \
+          --service=downloads \
+          --hostname="{{ crc_downloads_alias }}" \
+          --insecure-policy=Redirect \
+          --dry-run=client -o yaml | "{{ oc_command }}" -n openshift-console apply -f -
+        "{{ oc_command }}" -n openshift-ingress-canary create route passthrough "{{ crc_canary_route_name }}" \
+          --service=ingress-canary \
+          --port=8443-tcp \
+          --hostname="{{ crc_canary_alias }}" \
+          --insecure-policy=Redirect \
+          --dry-run=client -o yaml | "{{ oc_command }}" -n openshift-ingress-canary apply -f -
       args:
         executable: /bin/bash
       register: crc_builtin_route_rehost
