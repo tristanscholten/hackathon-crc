@@ -54,7 +54,7 @@
   ansible.builtin.reboot:
     reboot_timeout: 600
     connect_timeout: 10
-    post_reboot_delay: 15
+    post_reboot_delay: "{{ crc_wait_delay_seconds }}"
   when:
     - crc_reboot_after_package_install | bool
     - not crc_kvm_reboot_marker.stat.exists
@@ -309,8 +309,8 @@
   become_user: "{{ crc_run_user }}"
   ansible.builtin.command: "{{ crc_command }} setup"
   register: crc_setup
-  async: 7200
-  poll: 30
+  async: "{{ crc_async_timeout_seconds }}"
+  poll: "{{ crc_async_poll_seconds }}"
   when: (not crc_setup_marker.stat.exists) or (crc_setup_check.rc != 0)
   changed_when: "'already' not in (crc_setup.stdout | lower)"
 
@@ -379,8 +379,8 @@
   become_user: "{{ crc_run_user }}"
   ansible.builtin.command: "{{ crc_command }} ip"
   register: crc_ip_cmd
-  retries: 80
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_ip_cmd.rc == 0
   changed_when: false
 
@@ -427,8 +427,8 @@
   args:
     executable: /bin/bash
   register: crc_api_ready
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_api_ready.rc == 0
   changed_when: false
 
@@ -454,8 +454,8 @@
               upstreams:
                 - "{{ crc_bind_address }}"
   register: crc_dns_forward_config
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_dns_forward_config is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -469,8 +469,8 @@
   args:
     executable: /bin/bash
   register: crc_dns_forward_ready
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_dns_forward_ready.rc == 0
   changed_when: false
   when: crc_configure_custom_domains | bool
@@ -541,8 +541,8 @@
             servingCertKeyPairSecret:
               name: "{{ crc_domain_secret_name }}"
   register: crc_ingress_domain_config
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_ingress_domain_config is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -566,8 +566,8 @@
               servingCertificate:
                 name: "{{ crc_domain_secret_name }}"
   register: crc_api_domain_config
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_api_domain_config is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -597,8 +597,8 @@
   args:
     executable: /bin/bash
   register: crc_custom_domain_config
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_custom_domain_config.rc == 0
   changed_when: false
   when: crc_configure_custom_domains | bool
@@ -621,8 +621,8 @@
           - name: "{{ crc_registry_route_name }}"
             hostname: "{{ crc_registry_alias }}"
   register: crc_registry_route_config
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_registry_route_config is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -647,8 +647,8 @@
     - namespace: openshift-image-registry
       name: default-route
   register: crc_removed_legacy_routes
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_removed_legacy_routes is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -676,8 +676,8 @@
           insecureEdgeTerminationPolicy: Redirect
         wildcardPolicy: None
   register: crc_downloads_route_config
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_downloads_route_config is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -705,8 +705,8 @@
           insecureEdgeTerminationPolicy: Redirect
         wildcardPolicy: None
   register: crc_canary_route_config
-  retries: 20
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_canary_route_config is succeeded
   when: crc_configure_custom_domains | bool
 
@@ -724,8 +724,8 @@
   args:
     executable: /bin/bash
   register: crc_builtin_route_custom_domain
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_builtin_route_custom_domain.rc == 0
   changed_when: false
   when: crc_configure_custom_domains | bool
@@ -741,8 +741,8 @@
   args:
     executable: /bin/bash
   register: crc_developer_login_check
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_developer_login_check.rc == 0
   changed_when: false
   no_log: true
@@ -758,8 +758,8 @@
   args:
     executable: /bin/bash
   register: crc_console_ui_check
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_console_ui_check.rc == 0
   changed_when: false
 
@@ -771,8 +771,8 @@
   args:
     executable: /bin/bash
   register: crc_oauth_health_check
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_oauth_health_check.rc == 0
   changed_when: false
 
@@ -866,8 +866,8 @@
   delegate_to: localhost
   become: false
   register: crc_local_login_check
-  retries: 40
-  delay: 15
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
   until: crc_local_login_check.rc == 0
   changed_when: false
   no_log: true

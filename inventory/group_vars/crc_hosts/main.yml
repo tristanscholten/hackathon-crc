@@ -38,6 +38,14 @@ crc_memory_mib: 24576
 crc_disk_size_gib: 80
 crc_force_recreate: false
 
+crc_bind_address: "{{ ansible_host }}"
+
+# Shared polling knobs. Keep normal waits uniform so playbook timing is predictable.
+crc_wait_retries: 80
+crc_wait_delay_seconds: 15
+crc_async_timeout_seconds: 7200
+crc_async_poll_seconds: "{{ crc_wait_delay_seconds }}"
+
 crc_network_mode: user
 crc_dns_listen_addresses:
   - "127.0.0.1"
