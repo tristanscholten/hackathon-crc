@@ -86,7 +86,10 @@
       /dev/kvm {{ 'exists' if crc_kvm_device.stat.exists else 'is missing' }}.
       Continuing to crc setup so CRC performs its own official prerequisite checks.
 
-- name: Enable libvirt and NetworkManager
+- name: Collect service facts for optional virtualization services
+  ansible.builtin.service_facts:
+
+- name: Enable libvirt and NetworkManager when present
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     state: started
@@ -94,6 +97,7 @@
   loop:
     - libvirtd
     - NetworkManager
+  when: item ~ '.service' in ansible_facts.services
 
 - name: Add CRC run user to virtualization groups
   ansible.builtin.user:
