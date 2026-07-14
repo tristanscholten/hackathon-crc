@@ -28,8 +28,10 @@ On each Ubuntu host in `inventory/hosts.yml`:
 Default targets:
 
 ```text
-crc01 -> 192.168.10.55
-crc02 -> 192.168.10.56
+crc01 -> 192.168.10.68
+crc02 -> 192.168.10.69
+crc03 -> 192.168.10.63
+crc04 -> 192.168.10.70
 ```
 
 ## Do I need DNS?
@@ -61,24 +63,48 @@ Following the CRC engineering docs, the playbook configures:
 - `apiserver/cluster spec.servingCerts.namedCertificates` for the custom API host
 - `dns.operator/default spec.servers` so the cluster itself can resolve the custom domains
 - `dnsmasq` records so WireGuard clients can resolve the custom domains
+- optional Technitium DNS zone/record management on `https://dns01.lo.example-domain.eu:53443/` when `TECHNITIUM_DNS_API_TOKEN` is set
 
 For `crc01`, point DNS to:
 
 ```text
-api.crc01.testing     -> 192.168.10.55
-*.crc01.testing       -> 192.168.10.55
-*.apps-crc01.testing  -> 192.168.10.55
+api.crc01.testing     -> 192.168.10.68
+*.crc01.testing       -> 192.168.10.68
+*.apps-crc01.testing  -> 192.168.10.68
 ```
 
 For `crc02`, point DNS to:
 
 ```text
-api.crc02.testing     -> 192.168.10.56
-*.crc02.testing       -> 192.168.10.56
-*.apps-crc02.testing  -> 192.168.10.56
+api.crc02.testing     -> 192.168.10.69
+*.crc02.testing       -> 192.168.10.69
+*.apps-crc02.testing  -> 192.168.10.69
 ```
 
-The playbook installs `dnsmasq` on the CRC host. While connected to WireGuard, either use the target host as DNS (`192.168.10.55` for crc01, `192.168.10.56` for crc02) or copy the same records into your existing DNS servers.
+For `crc03`, point DNS to:
+
+```text
+api.crc03.testing     -> 192.168.10.63
+*.crc03.testing       -> 192.168.10.63
+*.apps-crc03.testing  -> 192.168.10.63
+```
+
+For `crc04`, point DNS to:
+
+```text
+api.crc04.testing     -> 192.168.10.70
+*.crc04.testing       -> 192.168.10.70
+*.apps-crc04.testing  -> 192.168.10.70
+```
+
+The playbook installs `dnsmasq` on the CRC host. When a Technitium API token is available, the `technitium_dns` role also creates the `crcNN.testing` and `apps-crcNN.testing` primary zones and manages wildcard `A` records pointing at each host's `ansible_host` IP.
+
+Technitium configuration is disabled unless a token is provided:
+
+```bash
+export TECHNITIUM_DNS_API_TOKEN=...
+ansible-playbook -i inventory/hosts.yml --tags technitium_dns playbooks/site.yml
+```
 
 ## Requirements on the control machine
 
@@ -124,25 +150,30 @@ all:
     crc_hosts:
       hosts:
         crc01:
-          ansible_host: 192.168.10.55
+          ansible_host: 192.168.10.68
           ansible_user: lab
           crc_cluster_name: crc01
-          crc_bind_address: 192.168.10.55
         crc02:
-          ansible_host: 192.168.10.56
+          ansible_host: 192.168.10.69
           ansible_user: lab
           crc_cluster_name: crc02
-          crc_bind_address: 192.168.10.56
+        crc03:
+          ansible_host: 192.168.10.63
+          ansible_user: lab
+          crc_cluster_name: crc03
+        crc04:
+          ansible_host: 192.168.10.70
+          ansible_user: lab
+          crc_cluster_name: crc04
 ```
 
 Add more hosts for more clusters:
 
 ```yaml
-        crc02:
-          ansible_host: 192.168.10.56
+        crc05:
+          ansible_host: 192.168.10.71
           ansible_user: lab
-          crc_cluster_name: crc02
-          crc_bind_address: 192.168.10.56
+          crc_cluster_name: crc05
 ```
 
 ## Run

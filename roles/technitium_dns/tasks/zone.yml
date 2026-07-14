@@ -1,0 +1,66 @@
+---
+- name: Ensure Technitium DNS zone exists
+  delegate_to: localhost
+  become: false
+  ansible.builtin.uri:
+    url: "{{ technitium_dns_base_url }}/api/zones/create"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      zone: "{{ technitium_dns_zone.zone }}"
+      type: "{{ technitium_dns_zone_type }}"
+    headers:
+      Authorization: "{{ 'Bearer ' ~ technitium_dns_api_token }}"
+    validate_certs: "{{ technitium_dns_validate_certs }}"
+    return_content: true
+    status_code: 200
+  register: technitium_dns_zone_create
+  no_log: true
+  failed_when: false
+
+- name: Fail when Technitium DNS zone cannot be created
+  ansible.builtin.fail:
+    msg: >-
+      Technitium DNS zone {{ technitium_dns_zone.zone }} could not be created:
+      {{ technitium_dns_zone_create.json.errorMessage | default('unknown error') }}
+  when:
+    - technitium_dns_zone_create.json.status | default('error') != 'ok'
+    - "'already' not in (technitium_dns_zone_create.json.errorMessage | default('') | lower)"
+    - "'exists' not in (technitium_dns_zone_create.json.errorMessage | default('') | lower)"
+
+- name: Configure Technitium DNS wildcard A records
+  delegate_to: localhost
+  become: false
+  ansible.builtin.uri:
+    url: "{{ technitium_dns_base_url }}/api/zones/records/add"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      zone: "{{ technitium_dns_zone.zone }}"
+      domain: "{{ item.domain }}"
+      type: "{{ item.type | default('A') }}"
+      ipAddress: "{{ item.ip_address }}"
+      ttl: "{{ technitium_dns_ttl }}"
+      overwrite: "true"
+      comments: "Managed by hackathon-crc Ansible"
+    headers:
+      Authorization: "{{ 'Bearer ' ~ technitium_dns_api_token }}"
+    validate_certs: "{{ technitium_dns_validate_certs }}"
+    return_content: true
+    status_code: 200
+  loop: "{{ technitium_dns_zone.records }}"
+  loop_control:
+    label: "{{ item.domain }} -> {{ item.ip_address }}"
+  register: technitium_dns_record_add
+  no_log: true
+  failed_when: false
+
+- name: Fail when Technitium DNS wildcard A record cannot be configured
+  ansible.builtin.fail:
+    msg: >-
+      Technitium DNS record {{ item.item.domain }} in zone {{ technitium_dns_zone.zone }}
+      could not be configured: {{ item.json.errorMessage | default('unknown error') }}
+  loop: "{{ technitium_dns_record_add.results }}"
+  loop_control:
+    label: "{{ item.item.domain }}"
+  when: item.json.status | default('error') != 'ok'

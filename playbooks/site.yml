@@ -1,4 +1,12 @@
 ---
+- name: Configure CRC DNS records
+  hosts: crc_hosts
+  gather_facts: false
+
+  roles:
+    - role: technitium_dns
+      tags: technitium_dns
+
 - name: Install and expose OpenShift CRC
   hosts: crc_hosts
   become: true
@@ -6,3 +14,4 @@
 
   roles:
     - role: crc_local
+      tags: crc_local

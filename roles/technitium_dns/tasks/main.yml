@@ -1,0 +1,24 @@
+---
+- name: Skip Technitium DNS role when no API token is configured
+  ansible.builtin.debug:
+    msg: >-
+      Technitium DNS role disabled. Set TECHNITIUM_DNS_API_TOKEN or
+      technitium_dns_api_token to manage CRC wildcard DNS records.
+  when: not (technitium_dns_enabled | bool)
+
+- name: Assert Technitium DNS token is configured when role is enabled
+  ansible.builtin.assert:
+    that:
+      - technitium_dns_api_token | length > 0
+    fail_msg: >-
+      Set TECHNITIUM_DNS_API_TOKEN or technitium_dns_api_token to configure
+      Technitium DNS zones and records.
+  when: technitium_dns_enabled | bool
+
+- name: Configure Technitium DNS zones and wildcard records
+  ansible.builtin.include_tasks: zone.yml
+  loop: "{{ technitium_dns_zones }}"
+  loop_control:
+    loop_var: technitium_dns_zone
+    label: "{{ technitium_dns_zone.zone }}"
+  when: technitium_dns_enabled | bool
