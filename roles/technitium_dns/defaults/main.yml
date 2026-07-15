@@ -5,11 +5,14 @@ technitium_dns_api_token: "{{ lookup('env', 'TECHNITIUM_DNS_API_TOKEN') }}"
 technitium_dns_validate_certs: false
 technitium_dns_zone_type: Primary
 technitium_dns_ttl: 300
-technitium_dns_wait_delay_seconds: "{{ crc_wait_delay_seconds | default(15) }}"
-technitium_dns_wait_retries: "{{ crc_wait_retries | default(80) }}"
+technitium_dns_verify_server: 192.168.30.11
+technitium_dns_required_zone_permission: canModify
 technitium_dns_zones:
   - zone: "{{ crc_api_domain }}"
     records:
+      - domain: "api.{{ crc_api_domain }}"
+        type: A
+        ip_address: "{{ ansible_host }}"
       - domain: "*.{{ crc_api_domain }}"
         type: A
         ip_address: "{{ ansible_host }}"

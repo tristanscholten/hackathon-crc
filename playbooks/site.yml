@@ -2,6 +2,7 @@
 - name: Configure CRC DNS records
   hosts: crc_hosts
   gather_facts: false
+  tags: technitium_dns
 
   roles:
     - role: technitium_dns
@@ -11,6 +12,7 @@
   hosts: crc_hosts
   become: true
   gather_facts: true
+  tags: crc_local
 
   roles:
     - role: crc_local

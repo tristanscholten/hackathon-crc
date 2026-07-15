@@ -15,7 +15,38 @@
       Technitium DNS zones and records.
   when: technitium_dns_enabled | bool
 
-- name: Configure Technitium DNS zones and wildcard records
+- name: Read Technitium DNS API session and permissions
+  delegate_to: localhost
+  become: false
+  ansible.builtin.uri:
+    url: "{{ technitium_dns_base_url }}/api/user/session/get"
+    method: GET
+    headers:
+      Authorization: "{{ 'Bearer ' ~ technitium_dns_api_token }}"
+    validate_certs: "{{ technitium_dns_validate_certs }}"
+    return_content: true
+    status_code: 200
+  register: technitium_dns_session
+  no_log: true
+  failed_when: false
+  when: technitium_dns_enabled | bool
+
+- name: Fail when Technitium DNS token cannot modify zones
+  ansible.builtin.fail:
+    msg: >-
+      Technitium DNS token for user {{ technitium_dns_session.json.username | default('unknown') }}
+      cannot modify zones. Required permission: Zones.{{ technitium_dns_required_zone_permission }}=true.
+      Current Zones permissions: {{ technitium_dns_session.json.info.permissions.Zones | default({}) }}.
+      Issue a token with Zones: Modify and Zone: Modify rights, then rerun.
+  when:
+    - technitium_dns_enabled | bool
+    - >-
+      not (
+        technitium_dns_session.json.status | default('error') == 'ok' and
+        technitium_dns_session.json.info.permissions.Zones[technitium_dns_required_zone_permission] | default(false) | bool
+      )
+
+- name: Configure Technitium DNS zones and records
   ansible.builtin.include_tasks: zone.yml
   loop: "{{ technitium_dns_zones }}"
   loop_control:

@@ -20,17 +20,17 @@ On each Ubuntu host in `inventory/hosts.yml`:
 - verifies the console UI and OAuth health route over HTTPS
 - KVM/libvirt dependencies
 - OpenShift CRC VM
-- HAProxy TCP forwarding for the API server (`192.168.10.55:6443` -> `127.0.0.1:6443` in CRC user-networking mode)
-- CRC's user-networking router exposure for HTTP/HTTPS (`192.168.10.55:80/443`)
+- HAProxy TCP forwarding for the API server (`<ansible_host>:6443` -> `127.0.0.1:6443` in CRC user-networking mode)
+- CRC's user-networking router exposure for HTTP/HTTPS (`<ansible_host>:80/443`)
 - an 80 GiB CRC VM disk by default; smaller disks can hit OpenShift node `DiskPressure` after repeated restarts/log growth
 - dnsmasq records for CRC names
 
 Default targets:
 
 ```text
-crc01 -> 192.168.10.68
+crc01 -> 192.168.10.74
 crc02 -> 192.168.10.69
-crc03 -> 192.168.10.63
+crc03 -> 192.168.10.72
 crc04 -> 192.168.10.70
 ```
 
@@ -68,9 +68,9 @@ Following the CRC engineering docs, the playbook configures:
 For `crc01`, point DNS to:
 
 ```text
-api.crc01.testing     -> 192.168.10.68
-*.crc01.testing       -> 192.168.10.68
-*.apps-crc01.testing  -> 192.168.10.68
+api.crc01.testing     -> 192.168.10.74
+*.crc01.testing       -> 192.168.10.74
+*.apps-crc01.testing  -> 192.168.10.74
 ```
 
 For `crc02`, point DNS to:
@@ -84,9 +84,9 @@ api.crc02.testing     -> 192.168.10.69
 For `crc03`, point DNS to:
 
 ```text
-api.crc03.testing     -> 192.168.10.63
-*.crc03.testing       -> 192.168.10.63
-*.apps-crc03.testing  -> 192.168.10.63
+api.crc03.testing     -> 192.168.10.72
+*.crc03.testing       -> 192.168.10.72
+*.apps-crc03.testing  -> 192.168.10.72
 ```
 
 For `crc04`, point DNS to:
@@ -150,7 +150,7 @@ all:
     crc_hosts:
       hosts:
         crc01:
-          ansible_host: 192.168.10.68
+          ansible_host: 192.168.10.74
           ansible_user: lab
           crc_cluster_name: crc01
         crc02:
@@ -158,7 +158,7 @@ all:
           ansible_user: lab
           crc_cluster_name: crc02
         crc03:
-          ansible_host: 192.168.10.63
+          ansible_host: 192.168.10.72
           ansible_user: lab
           crc_cluster_name: crc03
         crc04:
@@ -201,7 +201,7 @@ The playbook downloads `oc`/`kubectl` both on the CRC host and under `.local/bin
 While connected to WireGuard, configure DNS to use the CRC host IP, e.g. for crc01:
 
 ```text
-DNS server: 192.168.10.55
+DNS server: 192.168.10.74
 ```
 
 Then open:
