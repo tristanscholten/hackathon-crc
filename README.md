@@ -31,7 +31,7 @@ Default targets:
 crc01 -> 192.168.10.74
 crc02 -> 192.168.10.69
 crc03 -> 192.168.10.72
-crc04 -> 192.168.10.70
+crc04 -> 192.168.10.75
 ```
 
 ## Do I need DNS?
@@ -92,9 +92,9 @@ api.crc03.testing     -> 192.168.10.72
 For `crc04`, point DNS to:
 
 ```text
-api.crc04.testing     -> 192.168.10.70
-*.crc04.testing       -> 192.168.10.70
-*.apps-crc04.testing  -> 192.168.10.70
+api.crc04.testing     -> 192.168.10.75
+*.crc04.testing       -> 192.168.10.75
+*.apps-crc04.testing  -> 192.168.10.75
 ```
 
 The playbook installs `dnsmasq` on the CRC host. When a Technitium API token is available, the `technitium_dns` role also creates the `crcNN.testing` and `apps-crcNN.testing` primary zones and manages wildcard `A` records pointing at each host's `ansible_host` IP.
@@ -162,7 +162,7 @@ all:
           ansible_user: lab
           crc_cluster_name: crc03
         crc04:
-          ansible_host: 192.168.10.70
+          ansible_host: 192.168.10.75
           ansible_user: lab
           crc_cluster_name: crc04
 ```
