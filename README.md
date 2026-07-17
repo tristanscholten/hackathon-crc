@@ -2,6 +2,28 @@
 
 Ansible playbook for installing OpenShift Local / CRC on fresh Ubuntu hosts and exposing it over a WireGuard-reachable network.
 
+## Quick start
+
+Run the full playbook, including Technitium DNS provisioning:
+
+```bash
+ansible-playbook playbooks/site.yml \
+  -i inventory/hosts.yml \
+  -e ansible_password='<lab-password>' \
+  -e ansible_become_password='<lab-password>' \
+  -e technitium_dns_api_token='<technitium-api-token>'
+```
+
+Or export the Technitium token instead of passing it on the command line:
+
+```bash
+export TECHNITIUM_DNS_API_TOKEN='<technitium-api-token>'
+ansible-playbook playbooks/site.yml \
+  -i inventory/hosts.yml \
+  -e ansible_password='<lab-password>' \
+  -e ansible_become_password='<lab-password>'
+```
+
 ## What it installs
 
 On each Ubuntu host in `inventory/hosts.yml`:
