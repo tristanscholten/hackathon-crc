@@ -279,6 +279,67 @@
     mode: "0600"
   no_log: true
 
+- name: Calculate dynamic CRC CPU and memory sizing
+  ansible.builtin.set_fact:
+    crc_effective_cpus: >-
+      {{
+        [
+          (((ansible_facts.processor_vcpus | default(ansible_facts.processor_nproc)) | int)
+          * (crc_resource_ratio | float)) | int,
+          crc_min_cpus | int
+        ] | max
+      }}
+    crc_effective_memory_mib: >-
+      {{
+        [
+          ((ansible_facts.memtotal_mb | int) * (crc_resource_ratio | float)) | int,
+          crc_min_memory_mib | int
+        ] | max
+      }}
+
+- name: Check current CRC config file
+  ansible.builtin.stat:
+    path: "{{ crc_run_home }}/.crc/crc.json"
+  register: crc_current_config_stat
+
+- name: Read current CRC config
+  ansible.builtin.slurp:
+    src: "{{ crc_run_home }}/.crc/crc.json"
+  register: crc_current_config_raw
+  when: crc_current_config_stat.stat.exists
+
+- name: Store current CRC config
+  ansible.builtin.set_fact:
+    crc_current_config: >-
+      {{
+        (crc_current_config_raw.content | b64decode | from_json)
+        if crc_current_config_stat.stat.exists
+        else {}
+      }}
+
+- name: Detect CRC VM sizing drift
+  ansible.builtin.set_fact:
+    crc_resource_config_changed: >-
+      {{
+        (crc_current_config | length > 0)
+        and (
+          (crc_current_config.cpus | default(0) | int) != (crc_effective_cpus | int)
+          or (crc_current_config.memory | default(0) | int) != (crc_effective_memory_mib | int)
+          or (crc_current_config['disk-size'] | default(0) | int) != (crc_disk_size_gib | int)
+        )
+      }}
+
+- name: Show calculated CRC sizing
+  ansible.builtin.debug:
+    msg:
+      cluster: "{{ crc_cluster_name }}"
+      host_cpus: "{{ ansible_facts.processor_vcpus | default(ansible_facts.processor_nproc) }}"
+      host_memory_mib: "{{ ansible_facts.memtotal_mb }}"
+      resource_ratio: "{{ crc_resource_ratio }}"
+      crc_cpus: "{{ crc_effective_cpus }}"
+      crc_memory_mib: "{{ crc_effective_memory_mib }}"
+      recreate_required: "{{ crc_force_recreate | bool or crc_resource_config_changed | bool }}"
+
 - name: Configure CRC
   become_user: "{{ crc_run_user }}"
   ansible.builtin.command: "{{ crc_command }} config set {{ item.key }} {{ item.value }}"
@@ -288,8 +349,8 @@
     - { key: preset, value: "openshift" }
     - { key: network-mode, value: "{{ crc_network_mode }}" }
     - { key: pull-secret-file, value: "{{ crc_pull_secret_dest }}" }
-    - { key: cpus, value: "{{ crc_cpus }}" }
-    - { key: memory, value: "{{ crc_memory_mib }}" }
+    - { key: cpus, value: "{{ crc_effective_cpus }}" }
+    - { key: memory, value: "{{ crc_effective_memory_mib }}" }
     - { key: disk-size, value: "{{ crc_disk_size_gib }}" }
   changed_when: true
 
@@ -333,17 +394,17 @@
   changed_when: false
   when: crc_network_mode == 'user'
 
-- name: Stop existing CRC before forced recreate
+- name: Stop existing CRC before recreate
   become_user: "{{ crc_run_user }}"
   ansible.builtin.command: "{{ crc_command }} stop"
-  when: crc_force_recreate | bool
+  when: crc_force_recreate | bool or crc_resource_config_changed | bool
   failed_when: false
   changed_when: true
 
-- name: Delete existing CRC before forced recreate
+- name: Delete existing CRC before recreate
   become_user: "{{ crc_run_user }}"
   ansible.builtin.command: "{{ crc_command }} delete -f"
-  when: crc_force_recreate | bool
+  when: crc_force_recreate | bool or crc_resource_config_changed | bool
   failed_when: false
   changed_when: true
 

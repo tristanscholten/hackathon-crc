@@ -33,8 +33,10 @@ local_oc_command: "{{ local_oc_dir }}/oc"
 crc_pull_secret_src: "{{ lookup('env', 'CRC_PULL_SECRET_PATH') | default('~/.hermes/secrets/hackathon-crc-pull-secret.json', true) | expanduser }}"
 crc_pull_secret_dest: "{{ crc_run_home }}/.crc-pull-secret.json"
 
-crc_cpus: 8
-crc_memory_mib: 24576
+# Size CRC dynamically from each host. Defaults use 80% of host CPU/memory.
+crc_resource_ratio: 0.8
+crc_min_cpus: 4
+crc_min_memory_mib: 14336
 crc_disk_size_gib: 80
 crc_force_recreate: false
 

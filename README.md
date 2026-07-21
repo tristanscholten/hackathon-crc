@@ -44,6 +44,7 @@ On each Ubuntu host in `inventory/hosts.yml`:
 - OpenShift CRC VM
 - HAProxy TCP forwarding for the API server (`<ansible_host>:6443` -> `127.0.0.1:6443` in CRC user-networking mode)
 - CRC's user-networking router exposure for HTTP/HTTPS (`<ansible_host>:80/443`)
+- CRC CPU and memory sized dynamically to 80% of each host by default
 - an 80 GiB CRC VM disk by default; smaller disks can hit OpenShift node `DiskPressure` after repeated restarts/log growth
 - dnsmasq records for CRC names
 
@@ -197,6 +198,28 @@ Add more hosts for more clusters:
           ansible_user: lab
           crc_cluster_name: crc05
 ```
+
+## CRC sizing
+
+CRC CPU and memory are calculated per host from gathered Ansible facts:
+
+```yaml
+crc_resource_ratio: 0.8
+crc_min_cpus: 4
+crc_min_memory_mib: 14336
+crc_disk_size_gib: 80
+```
+
+Effective values:
+
+```text
+crc_effective_cpus       = floor(host_vcpus * crc_resource_ratio)
+crc_effective_memory_mib = floor(host_memory_mib * crc_resource_ratio)
+```
+
+If the existing CRC VM config differs from the calculated CPU, memory, or disk
+size, the role stops and deletes the existing CRC VM before starting it again so
+the new sizing takes effect.
 
 ## Run
 
