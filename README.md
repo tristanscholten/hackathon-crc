@@ -221,6 +221,27 @@ If the existing CRC VM config differs from the calculated CPU, memory, or disk
 size, the role stops and deletes the existing CRC VM before starting it again so
 the new sizing takes effect.
 
+Optional guard rails catch wrong hypervisor CPU exposure before CRC starts:
+
+```yaml
+crc_expected_host_cpus: 24
+crc_expected_cpus: 19
+```
+
+For example, if you expected a 40-vCPU host and therefore a 32-vCPU CRC VM,
+run with:
+
+```bash
+ansible-playbook playbooks/site.yml \
+  -i inventory/hosts.yml \
+  --limit crc01 \
+  -e crc_expected_host_cpus=40 \
+  -e crc_expected_cpus=32
+```
+
+The role also verifies the live OpenShift node reports the calculated CPU
+capacity after CRC starts.
+
 ## Run
 
 For a password-based fresh Ubuntu host:
