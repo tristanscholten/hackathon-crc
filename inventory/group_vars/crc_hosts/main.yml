@@ -25,9 +25,13 @@ crc_run_user: "{{ ansible_user }}"
 crc_run_home: "/home/{{ crc_run_user }}"
 crc_download_dir: "{{ crc_run_home }}/Downloads"
 crc_user_bin_dir: "{{ crc_run_home }}/bin"
+crc_user_systemd_dir: "{{ crc_run_home }}/.config/systemd/user"
 crc_cache_dir: /var/lib/crc-cache-{{ crc_run_user }}
 crc_command: "{{ crc_user_bin_dir }}/crc"
 oc_command: "{{ crc_user_bin_dir }}/oc"
+crc_enable_boot_autostart: true
+crc_autostart_service_name: crc-autostart.service
+crc_autostart_script_path: "{{ crc_user_bin_dir }}/crc-autostart.sh"
 local_oc_dir: "{{ playbook_dir }}/../.local/bin"
 local_oc_command: "{{ local_oc_dir }}/oc"
 crc_pull_secret_src: "{{ lookup('env', 'CRC_PULL_SECRET_PATH') | default('~/.hermes/secrets/hackathon-crc-pull-secret.json', true) | expanduser }}"
