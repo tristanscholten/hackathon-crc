@@ -36,6 +36,7 @@ On each Ubuntu host in `inventory/hosts.yml`:
 - runs `crc config set preset openshift` before start
 - runs `crc setup`
 - runs `crc start`
+- installs and enables a CRC user systemd autostart service so CRC starts again after host reboots
 - downloads the latest `oc`/`kubectl` archive from `https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz`
 - extracts `oc` and `kubectl` into `~/bin`
 - runs `oc login` as `developer` against the CRC API

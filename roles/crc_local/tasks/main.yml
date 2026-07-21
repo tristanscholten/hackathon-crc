@@ -129,6 +129,14 @@
     group: "{{ crc_run_user }}"
     mode: "0755"
 
+- name: Create CRC user systemd directory
+  ansible.builtin.file:
+    path: "{{ crc_user_systemd_dir }}"
+    state: directory
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0755"
+
 - name: Download latest CRC archive
   become_user: "{{ crc_run_user }}"
   ansible.builtin.get_url:
@@ -393,6 +401,48 @@
     executable: /bin/bash
   changed_when: false
   when: crc_network_mode == 'user'
+
+- name: Install CRC boot autostart helper
+  ansible.builtin.template:
+    src: crc-autostart.sh.j2
+    dest: "{{ crc_autostart_script_path }}"
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0750"
+  when: crc_enable_boot_autostart | bool
+
+- name: Install CRC boot autostart user service
+  ansible.builtin.template:
+    src: crc-autostart.service.j2
+    dest: "{{ crc_user_systemd_dir }}/{{ crc_autostart_service_name }}"
+    owner: "{{ crc_run_user }}"
+    group: "{{ crc_run_user }}"
+    mode: "0644"
+  when: crc_enable_boot_autostart | bool
+
+- name: Enable CRC boot autostart user service
+  ansible.builtin.shell: |
+    set -euo pipefail
+    uid="$(id -u {{ crc_run_user }})"
+    export XDG_RUNTIME_DIR="/run/user/${uid}"
+    sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user daemon-reload
+    sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user enable "{{ crc_autostart_service_name }}"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: crc_enable_boot_autostart | bool
+
+- name: Disable CRC boot autostart user service when requested
+  ansible.builtin.shell: |
+    set -euo pipefail
+    uid="$(id -u {{ crc_run_user }})"
+    export XDG_RUNTIME_DIR="/run/user/${uid}"
+    sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user disable --now "{{ crc_autostart_service_name }}" || true
+    sudo -u "{{ crc_run_user }}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" systemctl --user daemon-reload
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: not (crc_enable_boot_autostart | bool)
 
 - name: Stop existing CRC before recreate
   become_user: "{{ crc_run_user }}"
