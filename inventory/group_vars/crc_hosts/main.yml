@@ -61,6 +61,21 @@ crc_enable_haproxy: true
 crc_allow_passwordless_sudo_for_setup: true
 crc_reboot_after_package_install: true
 
+# Automated CRC storage guard. It runs from systemd every 10 minutes and only
+# removes unused CRI-O containers/images, vacuums journals, and trims filesystems.
+# It never removes images used by existing containers/pods.
+crc_storage_guard_enabled: true
+crc_storage_guard_timer_calendar: "*:0/10"
+crc_storage_guard_host_cleanup_used_percent: 85
+crc_storage_guard_host_critical_used_percent: 92
+crc_storage_guard_vm_cleanup_used_percent: 80
+crc_storage_guard_vm_critical_used_percent: 90
+crc_storage_guard_enable_container_prune: true
+crc_storage_guard_enable_image_prune: true
+crc_storage_guard_enable_journal_vacuum: true
+crc_storage_guard_enable_fstrim: true
+crc_storage_guard_auto_compact_qcow2: false
+
 crc_ubuntu_packages:
   - curl
   - tar

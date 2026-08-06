@@ -1,0 +1,13 @@
+[Unit]
+Description=CRC storage guard safe cleanup
+Documentation=https://crc.dev/docs/
+After=network-online.target libvirtd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ crc_storage_guard_script_path }}
+TimeoutStartSec=900
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

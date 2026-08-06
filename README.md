@@ -222,6 +222,71 @@ If the existing CRC VM config differs from the calculated CPU, memory, or disk
 size, the role stops and deletes the existing CRC VM before starting it again so
 the new sizing takes effect.
 
+## Automated storage guard
+
+Every CRC host gets a root systemd timer by default:
+
+```text
+crc-storage-guard.timer -> crc-storage-guard.service
+```
+
+It runs every 10 minutes and performs safe automatic cleanup before CRC fills
+its VM or host filesystem. No human approval is required for cleanup.
+
+What it checks:
+
+```yaml
+crc_storage_guard_host_path: "{{ crc_run_home }}/.crc/machines"
+crc_storage_guard_vm_var_path: /var
+crc_storage_guard_host_cleanup_used_percent: 85
+crc_storage_guard_host_critical_used_percent: 92
+crc_storage_guard_vm_cleanup_used_percent: 80
+crc_storage_guard_vm_critical_used_percent: 90
+```
+
+What it may clean automatically:
+
+```yaml
+crc_storage_guard_enable_container_prune: true
+crc_storage_guard_enable_image_prune: true
+crc_storage_guard_enable_journal_vacuum: true
+crc_storage_guard_enable_fstrim: true
+crc_storage_guard_journal_vacuum_size: 500M
+```
+
+The image prune uses:
+
+```bash
+crictl rmi --prune
+```
+
+That removes **unused** CRI-O images only. It does not remove images referenced
+by existing containers or pods. Running/used images are left alone.
+
+The guard intentionally does not compact qcow2 files automatically:
+
+```yaml
+crc_storage_guard_auto_compact_qcow2: false
+```
+
+Compaction can require scratch space and can make a full host worse. The guard
+prevents the common failure by pruning unused VM-side content early and running
+`fstrim`, not by doing risky late-stage disk surgery.
+
+Install or re-run only the guard:
+
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/storage-guard.yml
+```
+
+Run it on demand on a host:
+
+```bash
+sudo systemctl start crc-storage-guard.service
+sudo journalctl -u crc-storage-guard.service -n 100 --no-pager
+sudo tail -n 100 /var/log/crc-storage-guard/guard-$(date -u +%Y%m%d).log
+```
+
 ## Run
 
 For a password-based fresh Ubuntu host:

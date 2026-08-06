@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CRC storage guard periodically
+
+[Timer]
+OnCalendar={{ crc_storage_guard_timer_calendar }}
+Persistent=true
+RandomizedDelaySec=60
+Unit={{ crc_storage_guard_service_name }}.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,70 @@
+---
+- name: Ensure CRC storage guard directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ crc_storage_guard_log_dir }}"
+      mode: "0755"
+    - path: "{{ crc_storage_guard_state_dir }}"
+      mode: "0755"
+
+- name: Install CRC storage guard script
+  ansible.builtin.template:
+    src: crc-storage-guard.sh.j2
+    dest: "{{ crc_storage_guard_script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install CRC storage guard systemd service
+  ansible.builtin.template:
+    src: crc-storage-guard.service.j2
+    dest: "/etc/systemd/system/{{ crc_storage_guard_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install CRC storage guard systemd timer
+  ansible.builtin.template:
+    src: crc-storage-guard.timer.j2
+    dest: "/etc/systemd/system/{{ crc_storage_guard_service_name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Apply systemd reload before enabling timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable CRC storage guard timer
+  ansible.builtin.systemd_service:
+    name: "{{ crc_storage_guard_service_name }}.timer"
+    state: started
+    enabled: true
+  when: crc_storage_guard_enabled | bool
+
+- name: Disable CRC storage guard timer when disabled
+  ansible.builtin.systemd_service:
+    name: "{{ crc_storage_guard_service_name }}.timer"
+    state: stopped
+    enabled: false
+  when: not (crc_storage_guard_enabled | bool)
+
+- name: Run CRC storage guard once after install
+  ansible.builtin.command: "{{ crc_storage_guard_script_path }}"
+  register: crc_storage_guard_initial_run
+  changed_when: false
+  failed_when: crc_storage_guard_initial_run.rc not in [0, 2]
+  when: crc_storage_guard_enabled | bool
+
+- name: Show CRC storage guard initial result
+  ansible.builtin.debug:
+    var: crc_storage_guard_initial_run.stdout_lines
+  when:
+    - crc_storage_guard_enabled | bool
+    - crc_storage_guard_initial_run is defined

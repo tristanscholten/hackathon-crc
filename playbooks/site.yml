@@ -17,3 +17,5 @@
   roles:
     - role: crc_local
       tags: crc_local
+    - role: crc_storage_guard
+      tags: crc_storage_guard
