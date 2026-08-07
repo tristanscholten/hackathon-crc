@@ -338,7 +338,28 @@
       resource_ratio: "{{ crc_resource_ratio }}"
       crc_cpus: "{{ crc_effective_cpus }}"
       crc_memory_mib: "{{ crc_effective_memory_mib }}"
+      current_crc_cpus: "{{ crc_current_config.cpus | default('unset') }}"
+      current_crc_memory_mib: "{{ crc_current_config.memory | default('unset') }}"
       recreate_required: "{{ crc_force_recreate | bool or crc_resource_config_changed | bool }}"
+
+- name: Assert expected CRC sizing when requested
+  ansible.builtin.assert:
+    that:
+      - >-
+        (crc_expected_host_cpus is none)
+        or ((ansible_facts.processor_vcpus | default(ansible_facts.processor_nproc) | int)
+            == (crc_expected_host_cpus | int))
+      - >-
+        (crc_expected_cpus is none)
+        or ((crc_effective_cpus | int) == (crc_expected_cpus | int))
+    fail_msg: >-
+      CRC sizing expectation mismatch for {{ crc_cluster_name }}:
+      host_cpus={{ ansible_facts.processor_vcpus | default(ansible_facts.processor_nproc) }},
+      crc_resource_ratio={{ crc_resource_ratio }},
+      calculated_crc_cpus={{ crc_effective_cpus }},
+      expected_host_cpus={{ crc_expected_host_cpus | default('unset', true) }},
+      expected_crc_cpus={{ crc_expected_cpus | default('unset', true) }}.
+      Fix hypervisor CPU exposure or adjust the expected values before rerunning.
 
 - name: Configure CRC
   become_user: "{{ crc_run_user }}"
@@ -848,6 +869,25 @@
   register: crc_cluster_operator_summary
   changed_when: false
   failed_when: false
+
+- name: Verify live CRC node CPU capacity matches calculated sizing
+  become_user: "{{ crc_run_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KUBECONFIG="{{ crc_run_home }}/.crc/machines/crc/kubeconfig"
+    live_cpu="$({{ oc_command }} get node crc -o jsonpath='{.status.capacity.cpu}')"
+    live_allocatable="$({{ oc_command }} get node crc -o jsonpath='{.status.allocatable.cpu}')"
+    echo "expected_capacity_cpu={{ crc_effective_cpus }}"
+    echo "live_capacity_cpu=${live_cpu}"
+    echo "live_allocatable_cpu=${live_allocatable}"
+    test "${live_cpu}" = "{{ crc_effective_cpus }}"
+  args:
+    executable: /bin/bash
+  register: crc_live_node_cpu_check
+  retries: "{{ crc_wait_retries }}"
+  delay: "{{ crc_wait_delay_seconds }}"
+  until: crc_live_node_cpu_check.rc == 0
+  changed_when: false
 
 - name: Install HAProxy config
   ansible.builtin.template:

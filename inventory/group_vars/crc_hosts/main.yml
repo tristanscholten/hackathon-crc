@@ -40,6 +40,13 @@ crc_min_memory_mib: 14336
 crc_disk_size_gib: 80
 crc_force_recreate: false
 
+# Optional safety rails for lab upgrades. Leave unset for normal dynamic sizing.
+# Set crc_expected_host_cpus when you expect the host/hypervisor to expose a
+# specific vCPU count. Set crc_expected_cpus when you expect a specific CRC VM
+# size after applying crc_resource_ratio/minimums.
+crc_expected_host_cpus: null
+crc_expected_cpus: null
+
 crc_bind_address: "{{ ansible_host }}"
 
 # Shared polling knobs. Keep normal waits uniform so playbook timing is predictable.
