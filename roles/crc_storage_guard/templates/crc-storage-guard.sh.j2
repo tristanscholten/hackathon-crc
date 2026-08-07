@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -u -o pipefail
+
+LOG_DIR={{ crc_storage_guard_log_dir | quote }}
+STATE_DIR={{ crc_storage_guard_state_dir | quote }}
+HOST_PATH={{ crc_storage_guard_host_path | quote }}
+VM_KEY={{ crc_storage_guard_vm_ssh_key | quote }}
+VM_USER={{ crc_storage_guard_vm_user | quote }}
+VM_HOST={{ crc_storage_guard_vm_ssh_host | quote }}
+VM_PORT={{ crc_storage_guard_vm_ssh_port | quote }}
+VM_VAR_PATH={{ crc_storage_guard_vm_var_path | quote }}
+HOST_CLEANUP_USED={{ crc_storage_guard_host_cleanup_used_percent | int }}
+HOST_CRITICAL_USED={{ crc_storage_guard_host_critical_used_percent | int }}
+VM_CLEANUP_USED={{ crc_storage_guard_vm_cleanup_used_percent | int }}
+VM_CRITICAL_USED={{ crc_storage_guard_vm_critical_used_percent | int }}
+JOURNAL_VACUUM_SIZE={{ crc_storage_guard_journal_vacuum_size | quote }}
+ENABLE_IMAGE_PRUNE={{ 'true' if crc_storage_guard_enable_image_prune | bool else 'false' }}
+ENABLE_CONTAINER_PRUNE={{ 'true' if crc_storage_guard_enable_container_prune | bool else 'false' }}
+ENABLE_JOURNAL_VACUUM={{ 'true' if crc_storage_guard_enable_journal_vacuum | bool else 'false' }}
+ENABLE_FSTRIM={{ 'true' if crc_storage_guard_enable_fstrim | bool else 'false' }}
+AUTO_COMPACT_QCOW2={{ 'true' if crc_storage_guard_auto_compact_qcow2 | bool else 'false' }}
+
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
+LOG_FILE="${LOG_DIR}/guard-$(date -u +%Y%m%d).log"
+exec >>"${LOG_FILE}" 2>&1
+
+stamp() { date -u --iso-8601=seconds; }
+log() { printf '[%s] %s\n' "$(stamp)" "$*"; }
+used_percent() { df -P "$1" | awk 'NR==2 { gsub(/%/, "", $5); print $5 }'; }
+avail_human() { df -hP "$1" | awk 'NR==2 { print $4 }'; }
+
+run_vm() {
+  ssh -i "${VM_KEY}" \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=8 \
+    -p "${VM_PORT}" \
+    "${VM_USER}@${VM_HOST}" "$@"
+}
+
+safe_vm_cleanup() {
+  log "vm cleanup start"
+  run_vm 'set -u
+    CRICTL=""
+    for c in /usr/bin/crictl /bin/crictl /run/current-system/sw/bin/crictl; do
+      if [ -x "$c" ]; then CRICTL="$c"; break; fi
+    done
+
+    before=$(df -hP /var | awk "NR==2 {print \$5 \" used, \" \$4 \" free\"}")
+    echo "vm before: ${before}"
+
+    if [ -n "$CRICTL" ]; then
+      if {{ 'true' if crc_storage_guard_enable_container_prune | bool else 'false' }}; then
+        exited=$(sudo "$CRICTL" ps -a --state Exited -q 2>/dev/null || true)
+        if [ -n "$exited" ]; then
+          echo "$exited" | xargs -r sudo "$CRICTL" rm || true
+        fi
+      fi
+      if {{ 'true' if crc_storage_guard_enable_image_prune | bool else 'false' }}; then
+        # crictl rmi --prune removes unused images only. It does not remove
+        # images referenced by existing containers/pods.
+        sudo "$CRICTL" rmi --prune || true
+      fi
+    else
+      echo "crictl not found; skipping image cleanup"
+    fi
+
+    if {{ 'true' if crc_storage_guard_enable_journal_vacuum | bool else 'false' }}; then
+      sudo journalctl --vacuum-size={{ crc_storage_guard_journal_vacuum_size | quote }} || true
+    fi
+    if {{ 'true' if crc_storage_guard_enable_fstrim | bool else 'false' }}; then
+      sudo fstrim -av || true
+    fi
+
+    after=$(df -hP /var | awk "NR==2 {print \$5 \" used, \" \$4 \" free\"}")
+    echo "vm after: ${after}"
+  '
+}
+
+log "guard start"
+rc=0
+
+if [ ! -e "${HOST_PATH}" ]; then
+  log "host path missing: ${HOST_PATH}; nothing to clean yet"
+  exit 0
+fi
+
+host_used=$(used_percent "${HOST_PATH}")
+host_free=$(avail_human "${HOST_PATH}")
+log "host path=${HOST_PATH} used=${host_used}% free=${host_free}"
+
+vm_state="unknown"
+if command -v virsh >/dev/null 2>&1; then
+  vm_state=$(virsh -c qemu:///system domstate crc --reason 2>/dev/null || true)
+  log "vm state: ${vm_state}"
+fi
+
+vm_used=""
+if [ -r "${VM_KEY}" ]; then
+  vm_df=$(run_vm "df -P ${VM_VAR_PATH}" 2>/dev/null || true)
+  if [ -n "${vm_df}" ]; then
+    vm_used=$(awk 'NR==2 { gsub(/%/, "", $5); print $5 }' <<<"${vm_df}")
+    vm_free=$(awk 'NR==2 { print $4 }' <<<"$(run_vm "df -hP ${VM_VAR_PATH}" 2>/dev/null || true)")
+    log "vm path=${VM_VAR_PATH} used=${vm_used:-unknown}% free=${vm_free:-unknown}"
+  else
+    log "vm ssh unavailable; skip vm cleanup"
+  fi
+else
+  log "vm ssh key unreadable: ${VM_KEY}; skip vm cleanup"
+fi
+
+cleanup_needed=false
+if [ "${host_used}" -ge "${HOST_CLEANUP_USED}" ]; then
+  cleanup_needed=true
+  log "host cleanup threshold reached: ${host_used}% >= ${HOST_CLEANUP_USED}%"
+fi
+if [ -n "${vm_used}" ] && [ "${vm_used}" -ge "${VM_CLEANUP_USED}" ]; then
+  cleanup_needed=true
+  log "vm cleanup threshold reached: ${vm_used}% >= ${VM_CLEANUP_USED}%"
+fi
+
+if [ "${cleanup_needed}" = true ]; then
+  if safe_vm_cleanup; then
+    log "vm cleanup completed"
+  else
+    log "vm cleanup failed or vm unreachable"
+    rc=2
+  fi
+else
+  log "below cleanup thresholds; no action"
+fi
+
+host_used_after=$(used_percent "${HOST_PATH}")
+host_free_after=$(avail_human "${HOST_PATH}")
+log "host after used=${host_used_after}% free=${host_free_after}"
+
+if [ "${host_used_after}" -ge "${HOST_CRITICAL_USED}" ]; then
+  log "CRITICAL host usage remains ${host_used_after}% >= ${HOST_CRITICAL_USED}%"
+  rc=2
+fi
+if [ -n "${vm_used}" ]; then
+  vm_df_after=$(run_vm "df -P ${VM_VAR_PATH}" 2>/dev/null || true)
+  vm_used_after=$(awk 'NR==2 { gsub(/%/, "", $5); print $5 }' <<<"${vm_df_after}")
+  if [ -n "${vm_used_after}" ] && [ "${vm_used_after}" -ge "${VM_CRITICAL_USED}" ]; then
+    log "CRITICAL vm usage remains ${vm_used_after}% >= ${VM_CRITICAL_USED}%"
+    rc=2
+  fi
+fi
+
+if [ "${AUTO_COMPACT_QCOW2}" = true ]; then
+  log "qcow2 compaction requested but intentionally unsupported in automatic guard"
+fi
+
+log "guard done rc=${rc}"
+exit "${rc}"

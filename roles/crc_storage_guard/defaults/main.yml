@@ -1,0 +1,32 @@
+---
+crc_storage_guard_enabled: true
+crc_storage_guard_service_name: crc-storage-guard
+crc_storage_guard_script_path: /usr/local/sbin/crc-storage-guard
+crc_storage_guard_log_dir: /var/log/crc-storage-guard
+crc_storage_guard_state_dir: /var/lib/crc-storage-guard
+crc_storage_guard_timer_calendar: "*:0/10"
+
+# Host path that stores CRC qcow2 files. The guard monitors this filesystem.
+crc_storage_guard_host_path: "{{ crc_run_home }}/.crc/machines"
+crc_storage_guard_vm_ssh_key: "{{ crc_run_home }}/.crc/machines/crc/id_ed25519"
+crc_storage_guard_vm_ssh_host: 127.0.0.1
+crc_storage_guard_vm_ssh_port: 2222
+crc_storage_guard_vm_user: core
+crc_storage_guard_vm_var_path: /var
+
+# Cleanup starts at or above these percentages. Critical logs louder but still
+# uses only safe cleanup: unused containers/images, logs, trim. No used images.
+crc_storage_guard_host_cleanup_used_percent: 85
+crc_storage_guard_host_critical_used_percent: 92
+crc_storage_guard_vm_cleanup_used_percent: 80
+crc_storage_guard_vm_critical_used_percent: 90
+
+crc_storage_guard_journal_vacuum_size: 500M
+crc_storage_guard_enable_image_prune: true
+crc_storage_guard_enable_container_prune: true
+crc_storage_guard_enable_journal_vacuum: true
+crc_storage_guard_enable_fstrim: true
+
+# Keep automatic cleanup safe. Compaction/recreate can need scratch space and is
+# intentionally not automatic.
+crc_storage_guard_auto_compact_qcow2: false

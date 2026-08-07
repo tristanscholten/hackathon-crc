@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CRC_COMMAND={{ crc_command | quote }}
+PULL_SECRET={{ crc_pull_secret_dest | quote }}
+LOG_FILE={{ (crc_run_home ~ '/.crc/crc-autostart.log') | quote }}
+
+mkdir -p "$(dirname "${LOG_FILE}")"
+exec >>"${LOG_FILE}" 2>&1
+
+echo "[$(date --iso-8601=seconds)] crc-autostart invoked"
+
+if ! [ -x "${CRC_COMMAND}" ]; then
+  echo "CRC binary is not executable: ${CRC_COMMAND}"
+  exit 1
+fi
+
+if ! [ -r "${PULL_SECRET}" ]; then
+  echo "CRC pull secret is not readable: ${PULL_SECRET}"
+  exit 1
+fi
+
+status="$(${CRC_COMMAND} status --log-level error 2>&1 || true)"
+echo "${status}"
+
+if grep -qE 'OpenShift:[[:space:]]+(Running|Degraded)' <<<"${status}"; then
+  echo "CRC already running; no action needed"
+  exit 0
+fi
+
+if pgrep -u "$(id -u)" -f "^${CRC_COMMAND} start" >/dev/null; then
+  echo "crc start is already running; no action needed"
+  exit 0
+fi
+
+if grep -q 'OpenShift:[[:space:]]*Unreachable' <<<"${status}"; then
+  echo "CRC is unreachable; stopping before start"
+  "${CRC_COMMAND}" stop || true
+fi
+
+echo "Starting CRC"
+exec "${CRC_COMMAND}" start -p "${PULL_SECRET}"
