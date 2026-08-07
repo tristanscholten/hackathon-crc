@@ -1,0 +1,10 @@
+---
+- name: Expand CRC host /home with an added disk
+  hosts: crc_hosts
+  become: true
+  gather_facts: true
+  tags: crc_home_expansion
+
+  roles:
+    - role: crc_home_expansion
+      tags: crc_home_expansion

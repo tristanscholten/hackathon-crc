@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: crc_home_expansion
+  namespace: hackathon_crc
+  author: Tristan Scholten
+  description: Expand /home by consuming a newly added LVM disk for CRC storage.
+  license: MIT
+  min_ansible_version: "2.15"
+
+dependencies: []
