@@ -243,6 +243,36 @@ ansible-playbook playbooks/site.yml \
 The role also verifies the live OpenShift node reports the calculated CPU
 capacity after CRC starts.
 
+## Expand `/home` with a new disk
+
+CRC's writable VM disk defaults to:
+
+```text
+/home/<crc-user>/.crc/machines/crc/crc.qcow2
+```
+
+So the immediate fix for the known qcow2 host-full failure is to expand
+`/home`, not `/`, unless you intentionally move `.crc/machines` somewhere else.
+The standalone expansion playbook consumes a newly added empty disk such as
+`/dev/sdb`, adds it to the LVM volume group backing `/home`, and extends the
+`/home` logical volume/filesystem with all free space. Disk size is discovered at
+runtime, so 128G/256G/larger disks all work.
+
+Run on one host first:
+
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/expand-home-disk.yml \
+  --limit crc01 \
+  -e crc_home_expansion_disk=/dev/sdb
+```
+
+Safety behavior:
+
+- refuses to run unless `/home` is LVM-backed
+- refuses non-empty disks unless they are already an LVM PV in the same VG
+- consumes the full free size of the configured disk/VG
+- supports ext2/ext3/ext4/xfs online filesystem growth through `lvextend --resizefs`
+
 ## Automated storage guard
 
 Every CRC host gets a root systemd timer by default:

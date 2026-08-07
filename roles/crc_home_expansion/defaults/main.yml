@@ -1,0 +1,13 @@
+---
+# Extra disk to consume into the LVM volume group backing /home.
+crc_home_expansion_disk: /dev/sdb
+
+# CRC stores its writable VM disk below /home by default:
+# /home/<crc_run_user>/.crc/machines/crc/crc.qcow2
+# Expand /home, not /, unless crc_run_home has been moved elsewhere.
+crc_home_expansion_mount: /home
+
+# Refuse disks that already contain signatures/partitions unless they are already
+# an LVM PV in the target VG. Keep false: this playbook is meant for newly added
+# empty disks.
+crc_home_expansion_allow_nonempty_disk: false

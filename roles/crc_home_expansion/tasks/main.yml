@@ -1,0 +1,207 @@
+---
+- name: Assert target mount is /home
+  ansible.builtin.assert:
+    that:
+      - crc_home_expansion_mount == '/home'
+    fail_msg: >-
+      This role is intentionally scoped to expanding /home because CRC stores
+      .crc/machines below /home by default. Override the role only after moving
+      CRC machine storage elsewhere.
+
+- name: Check expansion disk exists
+  ansible.builtin.stat:
+    path: "{{ crc_home_expansion_disk }}"
+  register: crc_home_expansion_disk_stat
+
+- name: Fail when expansion disk is missing
+  ansible.builtin.assert:
+    that:
+      - crc_home_expansion_disk_stat.stat.exists
+      - crc_home_expansion_disk_stat.stat.isblk
+    fail_msg: "Expansion disk {{ crc_home_expansion_disk }} is missing or not a block device."
+
+- name: Discover target mount source
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - SOURCE
+      - --target
+      - "{{ crc_home_expansion_mount }}"
+  register: crc_home_expansion_mount_source
+  changed_when: false
+
+- name: Discover filesystem type for target mount
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - FSTYPE
+      - --target
+      - "{{ crc_home_expansion_mount }}"
+  register: crc_home_expansion_mount_fstype
+  changed_when: false
+
+- name: Discover LVM LV backing target mount
+  ansible.builtin.command:
+    argv:
+      - lvs
+      - --noheadings
+      - --readonly
+      - -o
+      - vg_name,lv_name
+      - "{{ crc_home_expansion_mount_source.stdout | trim }}"
+  register: crc_home_expansion_home_lv
+  changed_when: false
+
+- name: Store target VG and LV names
+  ansible.builtin.set_fact:
+    crc_home_expansion_vg_name: "{{ crc_home_expansion_home_lv.stdout.split()[0] }}"
+    crc_home_expansion_lv_name: "{{ crc_home_expansion_home_lv.stdout.split()[1] }}"
+    crc_home_expansion_lv_path: "{{ crc_home_expansion_mount_source.stdout | trim }}"
+
+- name: Verify supported target filesystem
+  ansible.builtin.assert:
+    that:
+      - crc_home_expansion_mount_fstype.stdout | trim in ['ext2', 'ext3', 'ext4', 'xfs']
+    fail_msg: >-
+      Unsupported filesystem {{ crc_home_expansion_mount_fstype.stdout | trim }} on
+      {{ crc_home_expansion_mount }}. Supported: ext2/ext3/ext4/xfs.
+
+- name: Inspect expansion disk layout
+  ansible.builtin.command:
+    argv:
+      - lsblk
+      - -n
+      - -b
+      - -o
+      - NAME,TYPE,FSTYPE,MOUNTPOINT
+      - "{{ crc_home_expansion_disk }}"
+  register: crc_home_expansion_disk_layout
+  changed_when: false
+
+- name: Inspect expansion disk signatures
+  ansible.builtin.command:
+    argv:
+      - wipefs
+      - -n
+      - "{{ crc_home_expansion_disk }}"
+  register: crc_home_expansion_disk_signatures
+  changed_when: false
+  failed_when: false
+
+- name: Check whether expansion disk is already an LVM PV
+  ansible.builtin.command:
+    argv:
+      - pvs
+      - --noheadings
+      - -o
+      - vg_name
+      - "{{ crc_home_expansion_disk }}"
+  register: crc_home_expansion_disk_pv
+  changed_when: false
+  failed_when: false
+
+- name: Store expansion disk state
+  ansible.builtin.set_fact:
+    crc_home_expansion_disk_is_pv: "{{ crc_home_expansion_disk_pv.rc == 0 }}"
+    crc_home_expansion_disk_vg: "{{ crc_home_expansion_disk_pv.stdout | trim }}"
+    crc_home_expansion_disk_has_children: >-
+      {{ crc_home_expansion_disk_layout.stdout_lines | select('search', '^.+ (part|lvm) ') | list | length > 0 }}
+    crc_home_expansion_disk_has_signatures: >-
+      {{ crc_home_expansion_disk_signatures.stdout | trim | length > 0 }}
+
+- name: Refuse unsafe expansion disk content
+  ansible.builtin.assert:
+    that:
+      - >-
+        crc_home_expansion_allow_nonempty_disk | bool
+        or not (crc_home_expansion_disk_has_children | bool)
+        or (
+          crc_home_expansion_disk_is_pv | bool
+          and crc_home_expansion_disk_vg == crc_home_expansion_vg_name
+        )
+      - >-
+        crc_home_expansion_allow_nonempty_disk | bool
+        or not (crc_home_expansion_disk_has_signatures | bool)
+        or (
+          crc_home_expansion_disk_is_pv | bool
+          and crc_home_expansion_disk_vg == crc_home_expansion_vg_name
+        )
+      - >-
+        not (crc_home_expansion_disk_is_pv | bool)
+        or crc_home_expansion_disk_vg == crc_home_expansion_vg_name
+    fail_msg: >-
+      Refusing to consume {{ crc_home_expansion_disk }}. It is not an empty disk
+      and is not already an LVM PV in VG {{ crc_home_expansion_vg_name }}.
+      Disk layout: {{ crc_home_expansion_disk_layout.stdout_lines }}.
+      wipefs output: {{ crc_home_expansion_disk_signatures.stdout_lines }}.
+      Existing PV VG: {{ crc_home_expansion_disk_vg | default('none', true) }}.
+
+- name: Create LVM PV on expansion disk when needed
+  ansible.builtin.command:
+    argv:
+      - pvcreate
+      - --yes
+      - "{{ crc_home_expansion_disk }}"
+  register: crc_home_expansion_pvcreate
+  changed_when: true
+  when: not crc_home_expansion_disk_is_pv | bool
+
+- name: Add expansion disk PV to /home VG when needed
+  ansible.builtin.command:
+    argv:
+      - vgextend
+      - "{{ crc_home_expansion_vg_name }}"
+      - "{{ crc_home_expansion_disk }}"
+  register: crc_home_expansion_vgextend
+  changed_when: true
+  when: not crc_home_expansion_disk_is_pv | bool
+
+- name: Discover VG free space before extending /home
+  ansible.builtin.command:
+    argv:
+      - vgs
+      - --noheadings
+      - --units
+      - b
+      - --nosuffix
+      - -o
+      - vg_free
+      - "{{ crc_home_expansion_vg_name }}"
+  register: crc_home_expansion_vg_free
+  changed_when: false
+
+- name: Extend /home LV to consume all VG free space
+  ansible.builtin.command:
+    argv:
+      - lvextend
+      - --resizefs
+      - --extents
+      - +100%FREE
+      - "{{ crc_home_expansion_lv_path }}"
+  register: crc_home_expansion_lvextend
+  changed_when: true
+  when: crc_home_expansion_vg_free.stdout | trim | float > 0
+
+- name: Gather final block and filesystem state
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo '--- lsblk ---'
+    lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT {{ crc_home_expansion_disk }}
+    echo '--- df ---'
+    df -h {{ crc_home_expansion_mount }}
+    echo '--- lvs ---'
+    lvs -o lv_name,vg_name,lv_path,lv_size,devices {{ crc_home_expansion_lv_path }}
+    echo '--- vgs ---'
+    vgs {{ crc_home_expansion_vg_name }}
+  args:
+    executable: /bin/bash
+  register: crc_home_expansion_final_state
+  changed_when: false
+
+- name: Show /home expansion result
+  ansible.builtin.debug:
+    msg: "{{ crc_home_expansion_final_state.stdout_lines }}"
