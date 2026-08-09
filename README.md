@@ -253,24 +253,37 @@ CRC's writable VM disk defaults to:
 
 So the immediate fix for the known qcow2 host-full failure is to expand
 `/home`, not `/`, unless you intentionally move `.crc/machines` somewhere else.
-The standalone expansion playbook consumes a newly added empty disk such as
-`/dev/sdb`, adds it to the LVM volume group backing `/home`, and extends the
-`/home` logical volume/filesystem with all free space. Disk size is discovered at
-runtime, so 128G/256G/larger disks all work.
+The standalone expansion playbook auto-discovers exactly one safe whole-disk
+candidate, adds it to the LVM volume group backing `/home`, and extends the
+`/home` logical volume/filesystem with all free space. The device name and disk
+size are discovered at runtime, so `/dev/sda`, `/dev/sdb`, `/dev/sdc`, NVMe,
+128G/256G/larger disks all work when they satisfy the safety checks.
 
 Run on one host first:
 
 ```bash
 ansible-playbook -i inventory/hosts.yml playbooks/expand-home-disk.yml \
+  --limit crc01
+```
+
+If more than one safe blank disk exists, auto-discovery refuses to guess. Inspect
+the host and select the intended disk explicitly:
+
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/expand-home-disk.yml \
   --limit crc01 \
-  -e crc_home_expansion_disk=/dev/sdb
+  -e crc_home_expansion_disk=/dev/sdc
 ```
 
 Safety behavior:
 
+- excludes the whole disk backing `/`
+- requires a whole disk of at least 32 GiB by default
+- requires exactly one safe candidate in automatic mode
+- refuses mounted, partitioned, signed, or foreign-VG disks
 - refuses to run unless `/home` is LVM-backed
-- refuses non-empty disks unless they are already an LVM PV in the same VG
-- consumes the full free size of the configured disk/VG
+- recognizes a previously consumed whole-disk PV in the `/home` VG for idempotent reruns
+- consumes the full free size of the selected disk/VG
 - supports ext2/ext3/ext4/xfs online filesystem growth through `lvextend --resizefs`
 
 ## Automated storage guard
