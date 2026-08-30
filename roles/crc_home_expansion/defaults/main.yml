@@ -1,6 +1,10 @@
 ---
-# Extra disk to consume into the LVM volume group backing /home.
-crc_home_expansion_disk: /dev/sdb
+# Use "auto" to discover one safe whole-disk candidate. Auto-discovery excludes
+# the disk backing /, mounted/partitioned disks, disks with signatures, and PVs
+# in another VG. It also recognizes a whole-disk PV already in the /home VG so
+# reruns remain idempotent. Set an explicit /dev path to resolve ambiguity.
+crc_home_expansion_disk: auto
+crc_home_expansion_min_disk_size_gib: 32
 
 # CRC stores its writable VM disk below /home by default:
 # /home/<crc_run_user>/.crc/machines/crc/crc.qcow2

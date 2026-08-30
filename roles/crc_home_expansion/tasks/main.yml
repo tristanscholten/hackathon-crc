@@ -8,18 +8,6 @@
       .crc/machines below /home by default. Override the role only after moving
       CRC machine storage elsewhere.
 
-- name: Check expansion disk exists
-  ansible.builtin.stat:
-    path: "{{ crc_home_expansion_disk }}"
-  register: crc_home_expansion_disk_stat
-
-- name: Fail when expansion disk is missing
-  ansible.builtin.assert:
-    that:
-      - crc_home_expansion_disk_stat.stat.exists
-      - crc_home_expansion_disk_stat.stat.isblk
-    fail_msg: "Expansion disk {{ crc_home_expansion_disk }} is missing or not a block device."
-
 - name: Discover target mount source
   ansible.builtin.command:
     argv:
@@ -62,6 +50,70 @@
     crc_home_expansion_lv_name: "{{ crc_home_expansion_home_lv.stdout.split()[1] }}"
     crc_home_expansion_lv_path: "{{ crc_home_expansion_mount_source.stdout | trim }}"
 
+- name: Discover safe whole-disk expansion candidates
+  ansible.builtin.shell: |
+    set -euo pipefail
+    root_source="$(findmnt -n -o SOURCE --target /)"
+    root_disk="$(lsblk -s -n -p -o NAME,TYPE "$root_source" | sed -n 's/ disk$//p' | tail -n 1)"
+    minimum_bytes=$(( {{ crc_home_expansion_min_disk_size_gib | int }} * 1024 * 1024 * 1024 ))
+
+    while read -r disk type size; do
+      test "$type" = disk || continue
+      test "$disk" != "$root_disk" || continue
+      test "$size" -ge "$minimum_bytes" || continue
+
+      existing_vg="$(pvs --noheadings -o vg_name "$disk" 2>/dev/null | xargs || true)"
+      if test "$existing_vg" = "{{ crc_home_expansion_vg_name }}"; then
+        printf '%s\n' "$disk"
+        continue
+      fi
+      test -z "$existing_vg" || continue
+
+      test "$(lsblk -n -o NAME "$disk" | wc -l)" -eq 1 || continue
+      test -z "$(lsblk -n -o FSTYPE "$disk" | xargs)" || continue
+      test -z "$(lsblk -n -o MOUNTPOINTS "$disk" | xargs)" || continue
+      test -z "$(wipefs -n "$disk" 2>/dev/null)" || continue
+      printf '%s\n' "$disk"
+    done < <(lsblk -d -n -b -p -o NAME,TYPE,SIZE)
+  args:
+    executable: /bin/bash
+  register: crc_home_expansion_auto_candidates
+  changed_when: false
+  when: crc_home_expansion_disk == 'auto'
+
+- name: Require exactly one safe auto-discovered expansion disk
+  ansible.builtin.assert:
+    that:
+      - crc_home_expansion_auto_candidates.stdout_lines | length == 1
+    fail_msg: >-
+      Auto-discovery requires exactly one safe whole-disk candidate of at least
+      {{ crc_home_expansion_min_disk_size_gib }} GiB, but found
+      {{ crc_home_expansion_auto_candidates.stdout_lines | default([]) }}.
+      Set crc_home_expansion_disk=/dev/<disk> explicitly after inspecting lsblk,
+      findmnt, wipefs, and LVM state.
+  when: crc_home_expansion_disk == 'auto'
+
+- name: Select expansion disk
+  ansible.builtin.set_fact:
+    crc_home_expansion_disk_device: >-
+      {{ crc_home_expansion_auto_candidates.stdout_lines[0]
+         if crc_home_expansion_disk == 'auto'
+         else crc_home_expansion_disk }}
+
+- name: Check selected expansion disk exists
+  ansible.builtin.stat:
+    path: "{{ crc_home_expansion_disk_device }}"
+  register: crc_home_expansion_disk_stat
+
+- name: Fail when selected expansion disk is missing
+  ansible.builtin.assert:
+    that:
+      - crc_home_expansion_disk_stat.stat.exists
+      - crc_home_expansion_disk_stat.stat.isblk
+    fail_msg: >-
+      Expansion disk {{ crc_home_expansion_disk_device }} is missing or is not a
+      block device.
+
 - name: Verify supported target filesystem
   ansible.builtin.assert:
     that:
@@ -78,7 +130,7 @@
       - -b
       - -o
       - NAME,TYPE,FSTYPE,MOUNTPOINT
-      - "{{ crc_home_expansion_disk }}"
+      - "{{ crc_home_expansion_disk_device }}"
   register: crc_home_expansion_disk_layout
   changed_when: false
 
@@ -87,7 +139,7 @@
     argv:
       - wipefs
       - -n
-      - "{{ crc_home_expansion_disk }}"
+      - "{{ crc_home_expansion_disk_device }}"
   register: crc_home_expansion_disk_signatures
   changed_when: false
   failed_when: false
@@ -99,7 +151,7 @@
       - --noheadings
       - -o
       - vg_name
-      - "{{ crc_home_expansion_disk }}"
+      - "{{ crc_home_expansion_disk_device }}"
   register: crc_home_expansion_disk_pv
   changed_when: false
   failed_when: false
@@ -134,7 +186,7 @@
         not (crc_home_expansion_disk_is_pv | bool)
         or crc_home_expansion_disk_vg == crc_home_expansion_vg_name
     fail_msg: >-
-      Refusing to consume {{ crc_home_expansion_disk }}. It is not an empty disk
+      Refusing to consume {{ crc_home_expansion_disk_device }}. It is not an empty disk
       and is not already an LVM PV in VG {{ crc_home_expansion_vg_name }}.
       Disk layout: {{ crc_home_expansion_disk_layout.stdout_lines }}.
       wipefs output: {{ crc_home_expansion_disk_signatures.stdout_lines }}.
@@ -145,7 +197,7 @@
     argv:
       - pvcreate
       - --yes
-      - "{{ crc_home_expansion_disk }}"
+      - "{{ crc_home_expansion_disk_device }}"
   register: crc_home_expansion_pvcreate
   changed_when: true
   when: not crc_home_expansion_disk_is_pv | bool
@@ -155,7 +207,7 @@
     argv:
       - vgextend
       - "{{ crc_home_expansion_vg_name }}"
-      - "{{ crc_home_expansion_disk }}"
+      - "{{ crc_home_expansion_disk_device }}"
   register: crc_home_expansion_vgextend
   changed_when: true
   when: not crc_home_expansion_disk_is_pv | bool
@@ -190,7 +242,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     echo '--- lsblk ---'
-    lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT {{ crc_home_expansion_disk }}
+    lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT {{ crc_home_expansion_disk_device }}
     echo '--- df ---'
     df -h {{ crc_home_expansion_mount }}
     echo '--- lvs ---'
